@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 1. Aplicação Principal Next.js + Node.js + Socket.io
   app:
