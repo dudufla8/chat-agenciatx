@@ -14,6 +14,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN mkdir -p /app/public/uploads
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
@@ -32,6 +33,8 @@ RUN apk add --no-cache openssl
 # Add non-root system user
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
+
+RUN mkdir -p /app/public/uploads
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
