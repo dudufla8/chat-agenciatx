@@ -46,13 +46,13 @@ export default function HomePage() {
         <div className="text-center mb-12">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold mb-4">
             <Car className="w-4 h-4" />
-            <span>SaaS Omnichannel Multi-Tenant para Frotas de Táxi</span>
+            <span>SaaS Omnichannel Multi-Tenant • Frotas & Operações</span>
           </div>
           <h1 className="text-4xl sm:text-5xl font-black text-white tracking-tight mb-4">
-            Central de Atendimento <span className="text-amber-400">Táxi 2.0</span>
+            Central de Atendimento <span className="text-amber-400">TX Omnichannel</span>
           </h1>
           <p className="text-sm sm:text-base text-slate-400 max-w-2xl mx-auto leading-relaxed">
-            Plataforma corporativa de Help Desk, triagem automatizada com máquina de estados, autenticação In-App SSO sem login manual e gestão de filas de atendimento.
+            Plataforma corporativa de Help Desk, triagem automatizada com máquina de estados, autenticação In-App SSO integrada e gestão de filas de atendimento em tempo real.
           </p>
         </div>
 
@@ -155,7 +155,7 @@ export default function HomePage() {
       </div>
 
       <footer className="text-center text-xs text-slate-500 py-4 border-t border-slate-900">
-        Táxi 2.0 Omnichannel SaaS &bull; Node.js, Next.js, Prisma, PostgreSQL, Redis, Socket.io
+        TX Omnichannel SaaS &bull; Agência TX IA &bull; Node.js, Next.js, Prisma, PostgreSQL, Redis, Socket.io
       </footer>
     </div>
   );

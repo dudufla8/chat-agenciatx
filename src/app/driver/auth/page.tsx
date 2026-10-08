@@ -88,7 +88,7 @@ function DriverAuthContent() {
         </p>
 
         <p className="text-xs text-slate-400 mb-6">
-          Por motivos de segurança e identificação da frota, este canal só pode ser acessado através do botão de suporte no seu aplicativo oficial Táxi Digital.
+          Por motivos de segurança e identificação da frota, este canal só pode ser acessado através do botão de suporte integrado no aplicativo oficial da sua central.
         </p>
 
         <div className="pt-4 border-t border-slate-800 flex flex-col gap-3">

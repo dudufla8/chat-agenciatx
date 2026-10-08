@@ -5,7 +5,7 @@ export class TriageEngine {
    * Generates the initial welcome message and main menu options
    */
   getInitialGreeting(context: TriageContext): TriageStepResult {
-    const greeting = `Olá, ${context.driverName || 'motorista'}! Seja bem-vindo à Central de Atendimento Táxi 2.0.\n\nSelecione o número da opção desejada:\n[1] Atualização de Cadastro / Veículo\n[2] Corridas (Correção de valor, Cancelamentos, Agendamentos)\n[3] Novo Cadastro - Quero participar\n[4] Outros Assuntos / Dúvidas Gerais\n[5] Dúvidas sobre Pagamentos / Repasses`;
+    const greeting = `Olá, ${context.driverName || 'motorista'}! Seja bem-vindo à Central de Atendimento Inteligente.\n\nSelecione o número da opção desejada:\n[1] Atualização de Cadastro / Veículo\n[2] Corridas (Correção de valor, Cancelamentos, Agendamentos)\n[3] Novo Cadastro - Quero participar\n[4] Outros Assuntos / Dúvidas Gerais\n[5] Dúvidas sobre Pagamentos / Repasses`;
 
     const options: TriageOption[] = [
       { id: '1', label: '1 - Atualização de Cadastro / Veículo' },

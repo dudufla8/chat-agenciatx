@@ -422,9 +422,9 @@ export default function OperatorDashboardPage() {
               <Car className="w-5 h-5 text-slate-950" />
             </div>
             <div>
-              <span className="text-sm font-black text-white tracking-wider">TÁXI 2.0</span>
+              <span className="text-sm font-black text-white tracking-wider">TX CENTRAL</span>
               <span className="text-xs text-amber-400 ml-1.5 font-bold uppercase tracking-widest text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15">
-                Central
+                Atendimento
               </span>
             </div>
           </div>
