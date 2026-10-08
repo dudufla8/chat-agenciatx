@@ -65,8 +65,8 @@ sleep 10
 
 # 6. Executar Migrações do Prisma e Seed dos dados iniciais
 echo "🗄️ Executando Prisma DB Push e Seed dos dados iniciais..."
-docker compose exec app npx prisma db push --accept-data-loss
-docker compose exec app npm run prisma:seed
+docker compose exec -T app npx prisma db push --accept-data-loss
+docker compose exec -T app npm run prisma:seed
 
 # 7. Configurar Certificado SSL Gratuito Let's Encrypt via Certbot
 echo "🔒 Configurando Certificado SSL com Certbot..."
