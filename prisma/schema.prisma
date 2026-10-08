@@ -1,0 +1,128 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  SUPERADMIN
+  ORG_ADMIN
+  OPERATOR
+}
+
+enum TicketStatus {
+  BOT_TRIAGE
+  WAITING_QUEUE
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum SenderType {
+  DRIVER
+  OPERATOR
+  BOT
+  SYSTEM
+}
+
+model Tenant {
+  id              String           @id @default(uuid())
+  name            String
+  slug            String           @unique
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  users           User[]
+  drivers         Driver[]
+  departments     Department[]
+  tickets         Ticket[]
+  cannedResponses CannedResponse[]
+}
+
+model User {
+  id           String       @id @default(uuid())
+  tenantId     String
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  email        String       @unique
+  passwordHash String
+  role         UserRole     @default(OPERATOR)
+  departments  Department[] @relation("UserDepartments")
+  tickets      Ticket[]     @relation("OperatorTickets")
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String   // Ex: "Cadastro & Veículos", "Corridas", "Financeiro/Pagamentos", "Dúvidas Gerais"
+  slug      String
+  users     User[]   @relation("UserDepartments")
+  tickets   Ticket[]
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, slug])
+}
+
+model Driver {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  prefixo    String
+  name       String
+  phone      String
+  plate      String?
+  externalId String?
+  tickets    Ticket[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, prefixo])
+}
+
+model Ticket {
+  id             String       @id @default(uuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driverId       String
+  driver         Driver       @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  departmentId   String?
+  department     Department?  @relation(fields: [departmentId], references: [id])
+  operatorId     String?
+  operator       User?        @relation("OperatorTickets", fields: [operatorId], references: [id])
+  status         TicketStatus @default(BOT_TRIAGE)
+  triageStep     String?      // Guarda o estado na árvore (ex: "MENU_PAGAMENTOS", "AWAITING_PIX_RECEIPT")
+  collectedData  Json?        // Armazena comprovantes, chave pix, motivo do cancelamento
+  internalNotes  String?      // Anotações da equipe que o motorista não vê
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  closedAt       DateTime?
+  messages       Message[]
+}
+
+model Message {
+  id         String     @id @default(uuid())
+  ticketId   String
+  ticket     Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderType SenderType
+  senderId   String?    // ID do operador ou do motorista
+  content    String
+  mediaUrl   String?
+  createdAt  DateTime   @default(now())
+}
+
+model CannedResponse {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shortcut  String   // Ex: "/pix", "/regras", "/suporte"
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+}

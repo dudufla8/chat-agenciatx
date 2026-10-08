@@ -1,0 +1,15 @@
+export const env = {
+  PORT: parseInt(process.env.PORT || '3000', 10),
+  NODE_ENV: process.env.NODE_ENV || 'development',
+  DATABASE_URL: process.env.DATABASE_URL || 'postgresql://user_taxi:senha_forte@localhost:5432/taxidespatch_db?schema=public',
+  REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
+  JWT_SECRET: process.env.JWT_SECRET || 'chave_super_secreta_para_operadores_jwt_987654321',
+  DRIVER_SSO_SECRET: process.env.DRIVER_SSO_SECRET || 'chave_compartilhada_com_app_do_motorista_taxi_digital_2026',
+  TAXI_DIGITAL_API_URL: process.env.TAXI_DIGITAL_API_URL || 'https://api.taxidigital.com.br/v1',
+  TAXI_DIGITAL_API_TOKEN: process.env.TAXI_DIGITAL_API_TOKEN || 'token_de_comunicacao_taxi_digital',
+  DOMAIN_NAME: process.env.DOMAIN_NAME || 'atendimento.seudominio.com.br',
+  META_WA_PHONE_NUMBER_ID: process.env.META_WA_PHONE_NUMBER_ID || '',
+  META_WA_ACCESS_TOKEN: process.env.META_WA_ACCESS_TOKEN || '',
+  META_WA_WEBHOOK_VERIFY_TOKEN: process.env.META_WA_WEBHOOK_VERIFY_TOKEN || 'taxi_webhook_secret_2026',
+  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+};
