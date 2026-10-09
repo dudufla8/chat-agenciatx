@@ -26,6 +26,65 @@ export interface InMemoryTicket {
 const MEMORY_TICKETS = new Map<string, InMemoryTicket>();
 
 export class TicketService {
+  private getOrCreateActiveTicketMemory(driver: {
+    id: string;
+    tenantId: string;
+    prefixo: string;
+    name: string;
+    phone: string;
+    plate?: string | null;
+  }) {
+    for (const t of MEMORY_TICKETS.values()) {
+      if (
+        t.driverId === driver.id &&
+        ([TicketStatus.BOT_TRIAGE, TicketStatus.WAITING_QUEUE, TicketStatus.IN_PROGRESS] as TicketStatus[]).includes(t.status)
+      ) {
+        return { ticket: t };
+      }
+    }
+
+    const ticketId = `tkt-${Date.now()}`;
+    const context: TriageContext = {
+      ticketId,
+      driverName: driver.name,
+      driverPrefixo: driver.prefixo,
+      currentStep: TriageState.MAIN_MENU,
+      collectedData: {},
+    };
+    const greeting = triageEngine.getInitialGreeting(context);
+
+    const initialMessage = {
+      id: `msg-${Date.now()}-1`,
+      ticketId,
+      senderType: SenderType.BOT,
+      content: greeting.botMessage,
+      createdAt: new Date(),
+    };
+
+    const mockTicket: InMemoryTicket = {
+      id: ticketId,
+      tenantId: driver.tenantId,
+      driverId: driver.id,
+      status: TicketStatus.BOT_TRIAGE,
+      triageStep: TriageState.MAIN_MENU,
+      collectedData: {},
+      internalNotes: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      driver: {
+        id: driver.id,
+        prefixo: driver.prefixo,
+        name: driver.name,
+        phone: driver.phone,
+        plate: driver.plate || 'N/A',
+      },
+      messages: [initialMessage],
+    };
+
+    MEMORY_TICKETS.set(ticketId, mockTicket);
+    return { ticket: mockTicket };
+  }
+
   /**
    * Finds or creates an active ticket for a driver
    */
@@ -37,6 +96,11 @@ export class TicketService {
     phone: string;
     plate?: string | null;
   }): Promise<{ ticket: any; initialMessages?: any[] }> {
+    const { isDatabaseOnline } = await import('../../lib/prisma');
+    if (!isDatabaseOnline()) {
+      return this.getOrCreateActiveTicketMemory(driver);
+    }
+
     try {
       // 1. Try finding existing active ticket in Prisma
       let existingTicket = await prisma.ticket.findFirst({
@@ -525,6 +589,22 @@ export class TicketService {
    * Fetches dashboard tickets grouped by tabs: Aguardando, Meus Atendimentos, Finalizados
    */
   async getDashboardTickets(tenantId: string, operatorId?: string, departmentId?: string) {
+    const { isDatabaseOnline } = await import('../../lib/prisma');
+    if (!isDatabaseOnline()) {
+      const waiting: any[] = [];
+      const myChats: any[] = [];
+      const closed: any[] = [];
+
+      for (const t of MEMORY_TICKETS.values()) {
+        if (t.tenantId !== tenantId) continue;
+        if (t.status === TicketStatus.WAITING_QUEUE) waiting.push(t);
+        else if (t.status === TicketStatus.IN_PROGRESS && t.operatorId === operatorId) myChats.push(t);
+        else if (([TicketStatus.RESOLVED, TicketStatus.CLOSED] as TicketStatus[]).includes(t.status)) closed.push(t);
+      }
+
+      return { waiting, myChats, closed };
+    }
+
     try {
       const [waiting, myChats, closed] = await Promise.all([
         prisma.ticket.findMany({

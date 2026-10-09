@@ -8,23 +8,27 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        taxi: {
-          50: '#fffbeb',
-          100: '#fef3c7',
-          200: '#fde68a',
-          300: '#fcd34d',
-          400: '#fbbf24',
-          500: '#f59e0b',
-          600: '#d97706',
-          700: '#b45309',
+        dark: {
+          bg: '#0a111a',
+          surface: '#101c2b',
+          card: '#101c2b',
+          bubbleRecv: '#142030',
+          bubbleSent: '#173b64',
+          border: 'rgba(255, 255, 255, 0.08)',
         },
         brand: {
-          dark: '#0f172a',
-          card: '#1e293b',
-          border: '#334155',
-          accent: '#3b82f6',
+          orange: '#ff5722',
+          orangeHover: '#ff6b35',
+          navy: '#0d1724',
+          blueSent: '#173b64',
+          textMuted: '#8a9ba8',
+          online: '#22c55e',
         }
       },
+      borderRadius: {
+        '2xl': '16px',
+        '3xl': '24px',
+      }
     },
   },
   plugins: [],

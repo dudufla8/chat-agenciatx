@@ -346,8 +346,8 @@ export default function DriverChatPage() {
               <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-slate-400">
                 {isBot && (
                   <>
-                    <Bot className="w-3.5 h-3.5 text-amber-400" />
-                    <span className="text-amber-400 font-semibold">Assistente Virtual Táxi</span>
+                    <Bot className="w-3.5 h-3.5 text-[#ff5722]" />
+                    <span className="text-[#ff5722] font-semibold">Assistente Virtual TX</span>
                   </>
                 )}
                 {!isDriver && !isBot && (

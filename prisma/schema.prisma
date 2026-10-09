@@ -40,6 +40,7 @@ model Tenant {
   departments     Department[]
   tickets         Ticket[]
   cannedResponses CannedResponse[]
+  botFlow         BotFlow?
 }
 
 model User {
@@ -125,4 +126,16 @@ model CannedResponse {
   title     String
   content   String
   createdAt DateTime @default(now())
+}
+
+model BotFlow {
+  id          String   @id @default(uuid())
+  tenantId    String   @unique
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  welcomeMsg  String   @default("Olá! Seja bem-vindo à nossa Central de Atendimento Inteligente.")
+  fallbackMsg String   @default("Desculpe, não compreendi. Por favor, selecione uma das opções abaixo:")
+  nodes       Json     // Árvore de nós, opções, direcionamento para filas e respostas
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
