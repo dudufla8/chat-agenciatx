@@ -15,8 +15,17 @@ export function initSocketServer(server: HttpServer): SocketIOServer {
   });
 
   io.on('connection', (socket: Socket) => {
-    // 1. Handshake Auth
-    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    // 1. Handshake Auth (auth object, query param or cookies fallback)
+    let token = socket.handshake.auth?.token || socket.handshake.query?.token;
+
+    if (!token && socket.request?.headers?.cookie) {
+      const cookieStr = socket.request.headers.cookie;
+      const opMatch = cookieStr.match(/operator_token=([^;]+)/);
+      const drvMatch = cookieStr.match(/driver_session=([^;]+)/);
+      if (opMatch) token = decodeURIComponent(opMatch[1]);
+      else if (drvMatch) token = decodeURIComponent(drvMatch[1]);
+    }
+
     let userType: 'DRIVER' | 'OPERATOR' | 'ANONYMOUS' = 'ANONYMOUS';
     let authData: any = null;
 
@@ -37,118 +46,154 @@ export function initSocketServer(server: HttpServer): SocketIOServer {
       }
     }
 
-    // 2. Join Ticket Room
-    socket.on('join_ticket', ({ ticketId }: { ticketId: string }) => {
-      if (ticketId) {
-        socket.join(`ticket:${ticketId}`);
+    // 2. Operator Join (Support explicit operator:join event)
+    socket.on('operator:join', ({ tenantId, operatorId }: { tenantId?: string; operatorId?: string }) => {
+      if (tenantId) socket.join(`tenant:${tenantId}`);
+      if (operatorId) socket.join(`operator:${operatorId}`);
+      userType = 'OPERATOR';
+      if (!authData) {
+        authData = { userId: operatorId || 'op-operator', tenantId: tenantId || 'tenant-default' };
       }
     });
 
-    // 3. Driver/Operator sends a message
-    socket.on(
-      'send_message',
-      async ({
-        ticketId,
-        content,
-        mediaUrl,
-      }: {
-        ticketId: string;
-        content: string;
-        mediaUrl?: string;
-      }) => {
-        try {
-          if (!ticketId || !content) return;
+    // 3. Join Ticket Room (Support both join_ticket and ticket:join)
+    const handleJoinTicket = ({ ticketId }: { ticketId: string }) => {
+      if (ticketId) {
+        socket.join(`ticket:${ticketId}`);
+      }
+    };
+    socket.on('join_ticket', handleJoinTicket);
+    socket.on('ticket:join', handleJoinTicket);
 
-          if (userType === 'OPERATOR') {
-            const { operatorMessage, ticket } = await ticketService.handleOperatorMessage(
-              ticketId,
-              authData.userId,
-              content,
-              mediaUrl
-            );
+    // 4. Message Sender (Supports send_message and message:send)
+    const handleMessageSend = async ({
+      ticketId,
+      content,
+      senderType,
+      senderId,
+      mediaUrl,
+    }: {
+      ticketId: string;
+      content: string;
+      senderType?: string;
+      senderId?: string;
+      mediaUrl?: string;
+    }) => {
+      try {
+        if (!ticketId || (!content && !mediaUrl)) return;
 
-            // Broadcast message to ticket room (Driver + Operators looking at ticket)
-            io?.to(`ticket:${ticketId}`).emit('new_message', operatorMessage);
-            io?.to(`ticket:${ticketId}`).emit('ticket_updated', ticket);
+        const isOperator = userType === 'OPERATOR' || senderType === 'OPERATOR';
 
-            // Notify all operators in tenant of activity
-            io?.to(`tenant:${authData.tenantId}`).emit('dashboard_refresh');
-          } else {
-            // Driver Message
-            const driverId = authData?.driverId || 'driver-unknown';
-            const { userMessage, botResponse, ticket } = await ticketService.handleDriverMessage(
-              ticketId,
-              driverId,
-              content,
-              mediaUrl
-            );
+        if (isOperator) {
+          const effectiveOpId = authData?.userId || senderId || 'operator-admin';
+          const { operatorMessage, ticket } = await ticketService.handleOperatorMessage(
+            ticketId,
+            effectiveOpId,
+            content,
+            mediaUrl
+          );
 
-            // Broadcast driver message to ticket room
-            io?.to(`ticket:${ticketId}`).emit('new_message', userMessage);
+          // Broadcast message to ticket room (Driver + Operators looking at ticket)
+          io?.to(`ticket:${ticketId}`).emit('new_message', operatorMessage);
+          io?.to(`ticket:${ticketId}`).emit('ticket:message', operatorMessage);
+          io?.to(`ticket:${ticketId}`).emit('ticket_updated', ticket);
 
-            // If bot replied, broadcast bot message
-            if (botResponse) {
-              setTimeout(() => {
-                io?.to(`ticket:${ticketId}`).emit('new_message', botResponse);
-                io?.to(`ticket:${ticketId}`).emit('ticket_updated', ticket);
-              }, 400);
-            }
+          // Notify all operators in tenant of activity
+          const tenantId = authData?.tenantId || ticket?.tenantId;
+          if (tenantId) {
+            io?.to(`tenant:${tenantId}`).emit('dashboard_refresh');
+          }
+        } else {
+          // Driver Message
+          const driverId = authData?.driverId || senderId || 'driver-unknown';
+          const { userMessage, botResponse, ticket } = await ticketService.handleDriverMessage(
+            ticketId,
+            driverId,
+            content,
+            mediaUrl
+          );
 
-            // If ticket transitioned to queue, notify operators
+          // Broadcast driver message to ticket room (both event formats for 100% compatibility)
+          io?.to(`ticket:${ticketId}`).emit('new_message', userMessage);
+          io?.to(`ticket:${ticketId}`).emit('ticket:message', userMessage);
+          io?.to(`ticket:${ticketId}`).emit('ticket_updated', ticket);
+
+          // Always notify all operators in tenant of new message/activity so conversation card updates
+          if (ticket?.tenantId) {
+            io?.to(`tenant:${ticket.tenantId}`).emit('dashboard_refresh');
             if (ticket.status === 'WAITING_QUEUE') {
               io?.to(`tenant:${ticket.tenantId}`).emit('queue_new_ticket', ticket);
-              io?.to(`tenant:${ticket.tenantId}`).emit('dashboard_refresh');
             }
           }
-        } catch (err: any) {
-          socket.emit('error', { message: err.message });
-        }
-      }
-    );
 
-    // 4. Operator Claims Ticket
+          // If bot replied, broadcast bot message
+          if (botResponse) {
+            setTimeout(() => {
+              io?.to(`ticket:${ticketId}`).emit('new_message', botResponse);
+              io?.to(`ticket:${ticketId}`).emit('ticket:message', botResponse);
+              io?.to(`ticket:${ticketId}`).emit('ticket_updated', ticket);
+              if (ticket?.tenantId) {
+                io?.to(`tenant:${ticket.tenantId}`).emit('dashboard_refresh');
+              }
+            }, 300);
+          }
+        }
+      } catch (err: any) {
+        console.error('[Socket Server] Error handling message:', err.message);
+        socket.emit('error', { message: err.message });
+      }
+    };
+
+    socket.on('send_message', handleMessageSend);
+    socket.on('message:send', handleMessageSend);
+
+    // 5. Operator Claims Ticket
     socket.on('claim_ticket', async ({ ticketId }: { ticketId: string }) => {
       try {
-        if (userType !== 'OPERATOR') return;
         const operatorName = authData?.name || 'Operador';
-        const updatedTicket = await ticketService.claimTicket(ticketId, authData.userId, operatorName);
+        const operatorId = authData?.userId || 'op-claim';
+        const updatedTicket = await ticketService.claimTicket(ticketId, operatorId, operatorName);
 
         io?.to(`ticket:${ticketId}`).emit('ticket_updated', updatedTicket);
-        io?.to(`tenant:${authData.tenantId}`).emit('dashboard_refresh');
+        if (authData?.tenantId || updatedTicket?.tenantId) {
+          io?.to(`tenant:${authData?.tenantId || updatedTicket.tenantId}`).emit('dashboard_refresh');
+        }
       } catch (err: any) {
         socket.emit('error', { message: err.message });
       }
     });
 
-    // 5. Operator Transfers Ticket
+    // 6. Operator Transfers Ticket
     socket.on('transfer_ticket', async ({ ticketId, departmentId }: { ticketId: string; departmentId: string }) => {
       try {
-        if (userType !== 'OPERATOR') return;
         const operatorName = authData?.name || 'Operador';
         const updatedTicket = await ticketService.transferTicket(ticketId, departmentId, operatorName);
 
         io?.to(`ticket:${ticketId}`).emit('ticket_updated', updatedTicket);
-        io?.to(`tenant:${authData.tenantId}`).emit('dashboard_refresh');
+        if (authData?.tenantId || updatedTicket?.tenantId) {
+          io?.to(`tenant:${authData?.tenantId || updatedTicket.tenantId}`).emit('dashboard_refresh');
+        }
       } catch (err: any) {
         socket.emit('error', { message: err.message });
       }
     });
 
-    // 6. Operator Closes Ticket
+    // 7. Operator Closes Ticket
     socket.on('close_ticket', async ({ ticketId }: { ticketId: string }) => {
       try {
-        if (userType !== 'OPERATOR') return;
         const operatorName = authData?.name || 'Operador';
         const updatedTicket = await ticketService.closeTicket(ticketId, operatorName);
 
         io?.to(`ticket:${ticketId}`).emit('ticket_updated', updatedTicket);
-        io?.to(`tenant:${authData.tenantId}`).emit('dashboard_refresh');
+        if (authData?.tenantId || updatedTicket?.tenantId) {
+          io?.to(`tenant:${authData?.tenantId || updatedTicket.tenantId}`).emit('dashboard_refresh');
+        }
       } catch (err: any) {
         socket.emit('error', { message: err.message });
       }
     });
 
-    // 7. Typing Indicator
+    // 8. Typing Indicator
     socket.on('typing', ({ ticketId, isTyping }: { ticketId: string; isTyping: boolean }) => {
       socket.to(`ticket:${ticketId}`).emit('user_typing', {
         userType,

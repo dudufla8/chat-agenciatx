@@ -43,7 +43,10 @@ import {
   Lock,
   Mail,
   User,
-  Car
+  Car,
+  ArrowLeft,
+  ChevronLeft,
+  X
 } from 'lucide-react';
 
 interface Operator {
@@ -119,7 +122,9 @@ export default function OperatorDashboardPage() {
 
   // Operator Session
   const [operator, setOperator] = useState<Operator | null>(null);
+  const [operatorToken, setOperatorToken] = useState<string>('');
   const [operatorStatus, setOperatorStatus] = useState<'ONLINE' | 'PAUSED'>('ONLINE');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Conversations & Queue State
   const [waitingTickets, setWaitingTickets] = useState<TicketItem[]>([]);
@@ -140,9 +145,16 @@ export default function OperatorDashboardPage() {
   const [internalNotes, setInternalNotes] = useState('');
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesSavedSuccess, setNotesSavedSuccess] = useState(false);
-  const [showRightDetails, setShowRightDetails] = useState(true);
+  const [showRightDetails, setShowRightDetails] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [selectedTransferDept, setSelectedTransferDept] = useState('');
+
+  // Auto-adapt right panel on wide desktop screens
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth >= 1440) {
+      setShowRightDetails(true);
+    }
+  }, []);
 
   // Reaction State for demo
   const [messageReactions, setMessageReactions] = useState<{ [key: string]: boolean }>({});
@@ -192,6 +204,7 @@ export default function OperatorDashboardPage() {
       const data = await res.json();
       if (data.success) {
         setOperator(data.operator);
+        if (data.token) setOperatorToken(data.token);
         setWaitingTickets(data.tickets?.waiting || []);
         setMyTickets(data.tickets?.inProgress || []);
         setClosedTickets(data.tickets?.closed || []);
@@ -239,12 +252,12 @@ export default function OperatorDashboardPage() {
     fetchFlowData();
   }, []);
 
-  // Socket Connection
+  // Socket Connection with Full Realtime Support
   useEffect(() => {
     if (!operator) return;
 
     const socket = io({
-      path: '/socket.io/',
+      auth: { token: operatorToken },
       transports: ['websocket', 'polling'],
     });
 
@@ -255,31 +268,77 @@ export default function OperatorDashboardPage() {
         tenantId: operator.tenantId,
         operatorId: operator.userId,
       });
+      if (activeTicket) {
+        socket.emit('join_ticket', { ticketId: activeTicket.id });
+        socket.emit('ticket:join', { ticketId: activeTicket.id });
+      }
     });
 
-    socket.on('ticket:message', (data: any) => {
-      if (activeTicket && data.ticketId === activeTicket.id) {
+    // Listen to new messages from driver or bot
+    const handleIncomingMessage = (data: any) => {
+      if (activeTicket && (data.ticketId === activeTicket.id || !data.ticketId)) {
         setMessages((prev) => {
-          if (prev.some((m) => m.id === data.id)) return prev;
+          if (prev.some((m) => m.id === data.id || (m.id.startsWith('temp-') && m.content === data.content))) {
+            return prev.map((m) => (m.id.startsWith('temp-') && m.content === data.content ? data : m));
+          }
           return [...prev, data];
         });
       }
       fetchDashboardData();
-    });
+    };
 
-    socket.on('ticket:assigned', () => fetchDashboardData());
-    socket.on('ticket:statusChanged', () => fetchDashboardData());
+    socket.on('new_message', handleIncomingMessage);
+    socket.on('ticket:message', handleIncomingMessage);
+    socket.on('dashboard_refresh', () => fetchDashboardData());
+    socket.on('queue_new_ticket', () => fetchDashboardData());
+    socket.on('ticket_updated', (updated: any) => {
+      if (activeTicket && updated.id === activeTicket.id) {
+        setActiveTicket((prev) => ({ ...prev, ...updated }));
+      }
+      fetchDashboardData();
+    });
 
     return () => {
       socket.disconnect();
     };
-  }, [operator, activeTicket]);
+  }, [operator, activeTicket?.id, operatorToken]);
+
+  // Periodic sync safety net (every 3.5s) to guarantee zero message loss even with network lags
+  useEffect(() => {
+    if (!operator) return;
+    const syncInterval = setInterval(() => {
+      fetchDashboardData();
+      if (activeTicket) {
+        fetch(`/api/operator/ticket-details?id=${activeTicket.id}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.success && data.ticket?.messages) {
+              setMessages((prev) => {
+                const incoming = data.ticket.messages;
+                if (incoming.length !== prev.length || incoming[incoming.length - 1]?.id !== prev[prev.length - 1]?.id) {
+                  return incoming;
+                }
+                return prev;
+              });
+            }
+          })
+          .catch(() => {});
+      }
+    }, 3500);
+
+    return () => clearInterval(syncInterval);
+  }, [operator, activeTicket?.id]);
 
   // Load Active Ticket Details
   const handleSelectTicket = async (ticket: TicketItem) => {
     setActiveTicket(ticket);
     setInternalNotes(ticket.internalNotes || '');
     setNotesSavedSuccess(false);
+
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('join_ticket', { ticketId: ticket.id });
+      socketRef.current.emit('ticket:join', { ticketId: ticket.id });
+    }
 
     try {
       const res = await fetch(`/api/operator/ticket-details?id=${ticket.id}`);
@@ -320,7 +379,7 @@ export default function OperatorDashboardPage() {
     setShowCannedDropdown(false);
   };
 
-  // Send Message
+  // Send Message (Both Socket Events Supported)
   const handleSendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim() || !activeTicket || !operator) return;
@@ -329,12 +388,29 @@ export default function OperatorDashboardPage() {
     setInputText('');
     setShowCannedDropdown(false);
 
+    // Optimistic append
+    const tempMsg = {
+      id: `temp-op-${Date.now()}`,
+      ticketId: activeTicket.id,
+      senderType: 'OPERATOR',
+      senderId: operator.userId,
+      content: textToSend,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempMsg]);
+
     if (socketRef.current) {
-      socketRef.current.emit('message:send', {
+      socketRef.current.emit('send_message', {
         ticketId: activeTicket.id,
+        content: textToSend,
         senderType: 'OPERATOR',
         senderId: operator.userId,
+      });
+      socketRef.current.emit('message:send', {
+        ticketId: activeTicket.id,
         content: textToSend,
+        senderType: 'OPERATOR',
+        senderId: operator.userId,
       });
     }
   };
@@ -579,24 +655,32 @@ export default function OperatorDashboardPage() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0a111a] text-white font-sans antialiased">
 
-      {/* ========================================================================= */}
-      {/* COLUNA 1: SIDEBAR PRINCIPAL (Navegação Global)                            */}
-      {/* ========================================================================= */}
-      <aside className="w-64 min-w-[16rem] bg-[#101c2b] border-r border-white/[0.08] flex flex-col justify-between p-4 z-40 select-none">
+      <aside className={`${sidebarCollapsed ? 'w-20 min-w-[5rem]' : 'w-64 min-w-[16rem]'} transition-all duration-300 bg-[#101c2b] border-r border-white/[0.08] flex flex-col justify-between p-3 md:p-4 z-40 select-none flex-shrink-0`}>
         <div>
-          {/* Logo Composto: DA / TX com gradiente */}
-          <div className="flex items-center gap-3 px-2 py-3 mb-6">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#ff5722] via-[#ff6b35] to-[#1e3a5f] flex items-center justify-center font-black text-lg tracking-wider text-white shadow-lg shadow-[#ff5722]/20">
-              TX
-            </div>
-            <div>
-              <div className="text-base font-bold text-white tracking-tight flex items-center gap-1.5">
-                <span>TX Mensageria</span>
+          {/* Logo Composto: DA / TX com gradiente + botão recolher */}
+          <div className="flex items-center justify-between px-1 py-3 mb-6">
+            <div className="flex items-center gap-3 overflow-hidden">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#ff5722] via-[#ff6b35] to-[#1e3a5f] flex items-center justify-center font-black text-lg tracking-wider text-white shadow-lg shadow-[#ff5722]/20 flex-shrink-0">
+                TX
               </div>
-              <p className="text-[11px] text-[#8a9ba8] font-medium tracking-wide">
-                Community & Connection
-              </p>
+              {!sidebarCollapsed && (
+                <div className="min-w-0">
+                  <div className="text-base font-bold text-white tracking-tight flex items-center gap-1.5 truncate">
+                    <span>TX Mensageria</span>
+                  </div>
+                  <p className="text-[11px] text-[#8a9ba8] font-medium tracking-wide truncate">
+                    Community & Connection
+                  </p>
+                </div>
+              )}
             </div>
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              className="p-1.5 rounded-xl hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white transition-colors"
+              title={sidebarCollapsed ? "Expandir Menu" : "Recolher Menu"}
+            >
+              <ChevronLeft className={`w-4 h-4 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} />
+            </button>
           </div>
 
           {/* Menu de Navegação Vertical */}
@@ -604,7 +688,8 @@ export default function OperatorDashboardPage() {
             {/* Dashboard / Chat Item */}
             <button
               onClick={() => setActiveNav('chat')}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
+              title="Member Chat"
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all relative ${
                 activeNav === 'chat'
                   ? 'bg-white/[0.08] text-white shadow-inner border border-white/[0.06]'
                   : 'text-[#8a9ba8] hover:text-white hover:bg-white/[0.04]'
@@ -612,10 +697,10 @@ export default function OperatorDashboardPage() {
             >
               <div className="flex items-center gap-3">
                 <MessageSquare className={`w-4 h-4 ${activeNav === 'chat' ? 'text-[#ff5722]' : ''}`} />
-                <span>Member Chat</span>
+                {!sidebarCollapsed && <span>Member Chat</span>}
               </div>
               {totalUnreadCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-[#ff5722] text-white text-[10px] font-bold shadow-md shadow-[#ff5722]/30">
+                <span className={`px-2 py-0.5 rounded-full bg-[#ff5722] text-white text-[10px] font-bold shadow-md shadow-[#ff5722]/30 ${sidebarCollapsed ? 'absolute -top-1 -right-1' : ''}`}>
                   {totalUnreadCount}
                 </span>
               )}
@@ -624,7 +709,8 @@ export default function OperatorDashboardPage() {
             {/* FlowBuilder */}
             <button
               onClick={() => setActiveNav('flowbuilder')}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
+              title="FlowBuilder (Bot)"
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
                 activeNav === 'flowbuilder'
                   ? 'bg-white/[0.08] text-white shadow-inner border border-white/[0.06]'
                   : 'text-[#8a9ba8] hover:text-white hover:bg-white/[0.04]'
@@ -632,17 +718,20 @@ export default function OperatorDashboardPage() {
             >
               <div className="flex items-center gap-3">
                 <GitBranch className={`w-4 h-4 ${activeNav === 'flowbuilder' ? 'text-[#ff5722]' : ''}`} />
-                <span>FlowBuilder (Bot)</span>
+                {!sidebarCollapsed && <span>FlowBuilder (Bot)</span>}
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold">
-                Auto
-              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold">
+                  Auto
+                </span>
+              )}
             </button>
 
             {/* Equipe & Acessos */}
             <button
               onClick={() => setActiveNav('team')}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
+              title="Equipe & Acessos"
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
                 activeNav === 'team'
                   ? 'bg-white/[0.08] text-white shadow-inner border border-white/[0.06]'
                   : 'text-[#8a9ba8] hover:text-white hover:bg-white/[0.04]'
@@ -650,17 +739,20 @@ export default function OperatorDashboardPage() {
             >
               <div className="flex items-center gap-3">
                 <Users className={`w-4 h-4 ${activeNav === 'team' ? 'text-[#ff5722]' : ''}`} />
-                <span>Equipe & Acessos</span>
+                {!sidebarCollapsed && <span>Equipe & Acessos</span>}
               </div>
-              <span className="text-[11px] text-[#8a9ba8] font-bold">
-                {teamList.length}
-              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[11px] text-[#8a9ba8] font-bold">
+                  {teamList.length}
+                </span>
+              )}
             </button>
 
             {/* Filas & Departamentos */}
             <button
               onClick={() => setActiveNav('queues')}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
+              title="Filas & Setores"
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
                 activeNav === 'queues'
                   ? 'bg-white/[0.08] text-white shadow-inner border border-white/[0.06]'
                   : 'text-[#8a9ba8] hover:text-white hover:bg-white/[0.04]'
@@ -668,17 +760,20 @@ export default function OperatorDashboardPage() {
             >
               <div className="flex items-center gap-3">
                 <Layers className={`w-4 h-4 ${activeNav === 'queues' ? 'text-[#ff5722]' : ''}`} />
-                <span>Filas & Setores</span>
+                {!sidebarCollapsed && <span>Filas & Setores</span>}
               </div>
-              <span className="text-[11px] text-[#8a9ba8] font-bold">
-                {departments.length}
-              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[11px] text-[#8a9ba8] font-bold">
+                  {departments.length}
+                </span>
+              )}
             </button>
 
             {/* Respostas Rápidas */}
             <button
               onClick={() => setActiveNav('canned')}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
+              title="Respostas Rápidas"
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all ${
                 activeNav === 'canned'
                   ? 'bg-white/[0.08] text-white shadow-inner border border-white/[0.06]'
                   : 'text-[#8a9ba8] hover:text-white hover:bg-white/[0.04]'
@@ -686,49 +781,66 @@ export default function OperatorDashboardPage() {
             >
               <div className="flex items-center gap-3">
                 <Sparkles className={`w-4 h-4 ${activeNav === 'canned' ? 'text-[#ff5722]' : ''}`} />
-                <span>Respostas Rápidas</span>
+                {!sidebarCollapsed && <span>Respostas Rápidas</span>}
               </div>
-              <span className="text-[11px] text-[#8a9ba8] font-bold">
-                /{cannedResponses.length}
-              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[11px] text-[#8a9ba8] font-bold">
+                  /{cannedResponses.length}
+                </span>
+              )}
             </button>
 
             {/* Premium Indicator */}
-            <div className="pt-2">
-              <div className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-semibold text-amber-400/90 bg-amber-500/10 border border-amber-500/20">
-                <Crown className="w-4 h-4 text-amber-400" />
-                <span>Plano Multi-Tenant</span>
+            {!sidebarCollapsed && (
+              <div className="pt-2">
+                <div className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-semibold text-amber-400/90 bg-amber-500/10 border border-amber-500/20">
+                  <Crown className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                  <span className="truncate">Plano Multi-Tenant</span>
+                </div>
               </div>
-            </div>
+            )}
           </nav>
         </div>
 
         {/* Card Promocional Inferior (CTA Banner) */}
         <div>
-          <div className="bg-gradient-to-br from-[#172535] to-[#101c2b] border border-white/[0.08] rounded-3xl p-4.5 mb-4 relative overflow-hidden group shadow-xl">
-            <div className="absolute -right-4 -bottom-4 w-20 h-20 bg-[#ff5722]/10 rounded-full blur-xl group-hover:bg-[#ff5722]/20 transition-all" />
-            <div className="w-10 h-10 rounded-2xl bg-[#ff5722]/20 border border-[#ff5722]/30 flex items-center justify-center mb-3">
-              <Megaphone className="w-5 h-5 text-[#ff5722]" />
+          {!sidebarCollapsed ? (
+            <div className="bg-gradient-to-br from-[#172535] to-[#101c2b] border border-white/[0.08] rounded-3xl p-4.5 mb-4 relative overflow-hidden group shadow-xl">
+              <div className="absolute -right-4 -bottom-4 w-20 h-20 bg-[#ff5722]/10 rounded-full blur-xl group-hover:bg-[#ff5722]/20 transition-all" />
+              <div className="w-10 h-10 rounded-2xl bg-[#ff5722]/20 border border-[#ff5722]/30 flex items-center justify-center mb-3">
+                <Megaphone className="w-5 h-5 text-[#ff5722]" />
+              </div>
+              <h4 className="text-xs font-bold text-white mb-1">Stand Out. Get Results.</h4>
+              <p className="text-[11px] text-[#8a9ba8] leading-relaxed mb-3.5">
+                Automatize a triagem e conecte seus membros instantaneamente!
+              </p>
+              <button
+                onClick={() => setActiveNav('flowbuilder')}
+                className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-[#ff5722] to-[#ff6b35] hover:opacity-95 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md shadow-[#ff5722]/25 transition-all"
+              >
+                <span>Personalizar Bot →</span>
+              </button>
             </div>
-            <h4 className="text-xs font-bold text-white mb-1">Stand Out. Get Results.</h4>
-            <p className="text-[11px] text-[#8a9ba8] leading-relaxed mb-3.5">
-              Automatize a triagem e conecte seus membros instantaneamente!
-            </p>
-            <button
-              onClick={() => setActiveNav('flowbuilder')}
-              className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-[#ff5722] to-[#ff6b35] hover:opacity-95 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md shadow-[#ff5722]/25 transition-all"
-            >
-              <span>Personalizar Bot →</span>
-            </button>
-          </div>
+          ) : (
+            <div className="flex justify-center mb-4">
+              <button
+                onClick={() => setActiveNav('flowbuilder')}
+                title="Personalizar Bot"
+                className="w-10 h-10 rounded-2xl bg-[#ff5722]/20 border border-[#ff5722]/30 flex items-center justify-center text-[#ff5722] hover:bg-[#ff5722]/30 transition-all"
+              >
+                <Megaphone className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* Logout Button */}
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#8a9ba8] hover:text-rose-400 transition-colors"
+            title="Encerrar Sessão"
+            className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-2.5'} px-3 py-2 text-xs font-semibold text-[#8a9ba8] hover:text-rose-400 transition-colors`}
           >
             <LogOut className="w-4 h-4" />
-            <span>Encerrar Sessão</span>
+            {!sidebarCollapsed && <span>Encerrar Sessão</span>}
           </button>
         </div>
       </aside>
@@ -742,7 +854,7 @@ export default function OperatorDashboardPage() {
           {/* ======================================================================= */}
           {/* COLUNA 2: LISTA DE CONVERSAS (Conversations)                            */}
           {/* ======================================================================= */}
-          <section className="w-80 min-w-[20rem] bg-[#0d1724] border-r border-white/[0.08] flex flex-col justify-between z-30">
+          <section className={`${activeTicket ? 'hidden md:flex' : 'flex'} w-full md:w-80 md:min-w-[19rem] lg:min-w-[20rem] bg-[#0d1724] border-r border-white/[0.08] flex-col justify-between z-30 flex-shrink-0`}>
             {/* Header da Lista */}
             <div className="p-4 border-b border-white/[0.08]">
               <div className="flex items-center justify-between mb-3.5">
@@ -893,24 +1005,32 @@ export default function OperatorDashboardPage() {
           {/* ======================================================================= */}
           {/* COLUNA 3: PAINEL CENTRAL DE CHAT (Área Principal)                       */}
           {/* ======================================================================= */}
-          <main className="flex-1 bg-[#0a111a] flex flex-col justify-between overflow-hidden relative">
+          <main className={`${!activeTicket ? 'hidden md:flex' : 'flex'} flex-1 min-w-0 bg-[#0a111a] flex-col justify-between overflow-hidden relative`}>
             {activeTicket ? (
               <>
                 {/* Barra Superior do Chat (Chat Header) */}
-                <header className="h-16 px-6 bg-[#101c2b]/90 backdrop-blur-md border-b border-white/[0.08] flex items-center justify-between z-20">
-                  <div className="flex items-center gap-3.5">
-                    <div className="relative">
+                <header className="h-16 px-4 md:px-6 bg-[#101c2b]/90 backdrop-blur-md border-b border-white/[0.08] flex items-center justify-between z-20">
+                  <div className="flex items-center gap-2.5 md:gap-3.5 min-w-0">
+                    {/* Botão Voltar para lista em telas mobile */}
+                    <button
+                      onClick={() => setActiveTicket(null)}
+                      className="p-2 -ml-2 rounded-xl text-[#8a9ba8] hover:text-white hover:bg-white/[0.06] md:hidden flex-shrink-0"
+                      title="Voltar para a lista"
+                    >
+                      <ArrowLeft className="w-5 h-5" />
+                    </button>
+                    <div className="relative flex-shrink-0">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#1e3a5f] to-[#ff5722] flex items-center justify-center font-bold text-xs text-white shadow-md">
                         {activeTicket.driver?.name?.slice(0, 2).toUpperCase() || 'TX'}
                       </div>
                       <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-[#22c55e] border-2 border-[#101c2b] rounded-full" />
                     </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                        <span>{activeTicket.driver?.name || 'Sophia Bennett'}</span>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2 truncate">
+                        <span className="truncate">{activeTicket.driver?.name || 'Motorista'}</span>
                         {activeTicket.driver?.prefixo && (
-                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-mono">
-                            Prefixo {activeTicket.driver.prefixo}
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-mono flex-shrink-0">
+                            Prefixo #{activeTicket.driver.prefixo}
                           </span>
                         )}
                       </h3>
@@ -1141,145 +1261,159 @@ export default function OperatorDashboardPage() {
           {/* COLUNA 4: BARRA LATERAL DIREITA (Widgets de Engajamento & Ficha)        */}
           {/* ======================================================================= */}
           {showRightDetails && (
-            <aside className="w-80 min-w-[20rem] bg-[#0d1724] border-l border-white/[0.08] flex flex-col justify-between overflow-y-auto p-4 z-30">
-              <div>
-                {/* Topo: Header com Controles Globais e Perfil Alex Morgan */}
-                <div className="flex items-center justify-between pb-4 border-b border-white/[0.08] mb-5">
-                  <div className="flex items-center gap-2">
-                    <button className="p-2 rounded-xl bg-white/[0.04] text-[#8a9ba8] hover:text-white transition-colors">
-                      <Search className="w-4 h-4" />
-                    </button>
-                    <div className="relative">
-                      <button className="p-2 rounded-xl bg-white/[0.04] text-[#8a9ba8] hover:text-white transition-colors">
-                        <Bell className="w-4 h-4" />
-                      </button>
-                      <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#ff5722] text-white text-[9px] font-bold flex items-center justify-center shadow-md">
-                        12
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Perfil do Usuário */}
-                  <div className="flex items-center gap-2 cursor-pointer bg-white/[0.04] hover:bg-white/[0.08] px-2.5 py-1.5 rounded-2xl border border-white/[0.06] transition-all">
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-[#1e3a5f] to-[#ff5722] flex items-center justify-center font-bold text-xs text-white">
-                      {operator?.name?.slice(0, 1) || 'A'}
-                    </div>
-                    <span className="text-xs font-semibold text-white max-w-[5rem] truncate">
-                      {operator?.name?.split(' ')[0] || 'Alex'}
-                    </span>
-                    <ChevronDown className="w-3.5 h-3.5 text-[#8a9ba8]" />
-                  </div>
-                </div>
-
-                {/* Subtítulo da Sessão */}
-                <div className="mb-5">
-                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">Member Chat</h4>
-                  <p className="text-[11px] text-[#8a9ba8]">Connect. Share. Grow Together.</p>
-                </div>
-
-                {/* Widget "Active Now" com Facepile e Contador */}
-                <div className="bg-[#101c2b] border border-white/[0.08] rounded-3xl p-4.5 mb-5 shadow-xl">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2 text-xs font-bold text-white">
-                      <Users className="w-4 h-4 text-[#ff5722]" />
-                      <span>Active Now</span>
-                    </div>
-                    <span className="text-[11px] font-semibold text-[#22c55e] flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e]" />
-                      128 Online
-                    </span>
-                  </div>
-
-                  {/* Facepile (Stack de Avatares Sobrepostos) */}
-                  <div className="flex items-center -space-x-2 mb-3.5">
-                    <div className="w-7 h-7 rounded-full bg-blue-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">JD</div>
-                    <div className="w-7 h-7 rounded-full bg-purple-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">SB</div>
-                    <div className="w-7 h-7 rounded-full bg-emerald-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">RC</div>
-                    <div className="w-7 h-7 rounded-full bg-amber-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">AL</div>
-                    <div className="w-7 h-7 rounded-full bg-[#1e3a5f] border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">+124</div>
-                  </div>
-
-                  <button
-                    onClick={() => setActiveNav('flowbuilder')}
-                    className="w-full py-2 px-3 rounded-xl bg-white/[0.04] hover:bg-[#ff5722]/15 text-[#ff5722] border border-[#ff5722]/30 font-bold text-[11px] flex items-center justify-center gap-1 transition-all"
-                  >
-                    <span>Configurar Triagem Automática →</span>
-                  </button>
-                </div>
-
-                {/* Detalhes do Atendimento Ativo */}
-                {activeTicket ? (
-                  <div className="bg-[#101c2b] border border-white/[0.08] rounded-3xl p-4.5 space-y-4 shadow-xl">
-                    <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-                      <h5 className="text-xs font-bold text-white">Ficha do Solicitante</h5>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/[0.06] text-[#8a9ba8] font-mono">
-                        {activeTicket.status}
-                      </span>
-                    </div>
-
-                    <div className="space-y-2 text-xs">
-                      <div className="flex justify-between">
-                        <span className="text-[#8a9ba8]">Prefixo:</span>
-                        <span className="text-white font-bold">#{activeTicket.driver?.prefixo || 'N/A'}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#8a9ba8]">Telefone:</span>
-                        <span className="text-white font-mono">{activeTicket.driver?.phone || 'N/A'}</span>
-                      </div>
-                      {activeTicket.driver?.plate && (
-                        <div className="flex justify-between">
-                          <span className="text-[#8a9ba8]">Placa:</span>
-                          <span className="text-amber-400 font-mono font-bold">{activeTicket.driver.plate}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between">
-                        <span className="text-[#8a9ba8]">Fila Atual:</span>
-                        <span className="text-emerald-400 font-semibold">{activeTicket.department?.name || 'Geral'}</span>
-                      </div>
-                    </div>
-
-                    {/* Transferir Fila Button */}
-                    <button
-                      onClick={() => setTransferModalOpen(true)}
-                      className="w-full py-2 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      <GitBranch className="w-3.5 h-3.5 text-[#ff5722]" />
-                      <span>Transferir de Fila</span>
-                    </button>
-
-                    {/* Notas Internas Confidenciais */}
-                    <div className="pt-2">
-                      <label className="block text-[11px] font-bold text-white mb-1.5 flex items-center justify-between">
-                        <span>Notas Internas (Equipe)</span>
-                        {notesSavedSuccess && (
-                          <span className="text-[#22c55e] text-[10px]">Salvo!</span>
-                        )}
-                      </label>
-                      <textarea
-                        rows={3}
-                        placeholder="Anotações confidenciais que o motorista não visualiza..."
-                        value={internalNotes}
-                        onChange={(e) => setInternalNotes(e.target.value)}
-                        className="w-full p-2.5 bg-[#0a111a] border border-white/[0.08] rounded-xl text-xs text-white placeholder-[#8a9ba8] focus:outline-none focus:border-[#ff5722] transition-colors resize-none mb-2"
-                      />
+            <>
+              {/* Backdrop para telas menores que 1440px / telas divididas */}
+              <div
+                onClick={() => setShowRightDetails(false)}
+                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 2xl:hidden"
+              />
+              <aside className="fixed inset-y-0 right-0 z-50 w-80 sm:w-88 2xl:static 2xl:z-30 2xl:flex min-w-[20rem] bg-[#0d1724] border-l border-white/[0.08] flex flex-col justify-between overflow-y-auto p-4 shadow-2xl transition-all flex-shrink-0">
+                <div>
+                  {/* Topo: Header com Controles Globais e Perfil Alex Morgan */}
+                  <div className="flex items-center justify-between pb-4 border-b border-white/[0.08] mb-5">
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={handleSaveNotes}
-                        disabled={notesSaving}
-                        className="w-full py-1.5 px-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-xs font-semibold text-white flex items-center justify-center gap-1.5 transition-colors"
+                        onClick={() => setShowRightDetails(false)}
+                        className="p-1.5 rounded-xl hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white transition-colors 2xl:hidden"
+                        title="Fechar painel de detalhes"
                       >
-                        <Save className="w-3.5 h-3.5 text-[#ff5722]" />
-                        <span>{notesSaving ? 'Salvando...' : 'Salvar Anotação'}</span>
+                        <X className="w-5 h-5" />
                       </button>
+                      <button className="p-2 rounded-xl bg-white/[0.04] text-[#8a9ba8] hover:text-white transition-colors">
+                        <Search className="w-4 h-4" />
+                      </button>
+                      <div className="relative">
+                        <button className="p-2 rounded-xl bg-white/[0.04] text-[#8a9ba8] hover:text-white transition-colors">
+                          <Bell className="w-4 h-4" />
+                        </button>
+                        <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#ff5722] text-white text-[9px] font-bold flex items-center justify-center shadow-md">
+                          12
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Perfil do Usuário */}
+                    <div className="flex items-center gap-2 cursor-pointer bg-white/[0.04] hover:bg-white/[0.08] px-2.5 py-1.5 rounded-2xl border border-white/[0.06] transition-all">
+                      <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-[#1e3a5f] to-[#ff5722] flex items-center justify-center font-bold text-xs text-white">
+                        {operator?.name?.slice(0, 1) || 'A'}
+                      </div>
+                      <span className="text-xs font-semibold text-white max-w-[5rem] truncate">
+                        {operator?.name?.split(' ')[0] || 'Alex'}
+                      </span>
+                      <ChevronDown className="w-3.5 h-3.5 text-[#8a9ba8]" />
                     </div>
                   </div>
-                ) : (
-                  <div className="p-4 rounded-3xl bg-[#101c2b] border border-white/[0.06] text-center text-[#8a9ba8] text-xs">
-                    <Info className="w-5 h-5 mx-auto mb-2 text-[#ff5722]" />
-                    Selecione um chamado para ver a ficha completa e notas internas.
+
+                  {/* Subtítulo da Sessão */}
+                  <div className="mb-5">
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">Member Chat</h4>
+                    <p className="text-[11px] text-[#8a9ba8]">Connect. Share. Grow Together.</p>
                   </div>
-                )}
-              </div>
-            </aside>
+
+                  {/* Widget "Active Now" com Facepile e Contador */}
+                  <div className="bg-[#101c2b] border border-white/[0.08] rounded-3xl p-4.5 mb-5 shadow-xl">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2 text-xs font-bold text-white">
+                        <Users className="w-4 h-4 text-[#ff5722]" />
+                        <span>Active Now</span>
+                      </div>
+                      <span className="text-[11px] font-semibold text-[#22c55e] flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e]" />
+                        128 Online
+                      </span>
+                    </div>
+
+                    {/* Facepile (Stack de Avatares Sobrepostos) */}
+                    <div className="flex items-center -space-x-2 mb-3.5">
+                      <div className="w-7 h-7 rounded-full bg-blue-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">JD</div>
+                      <div className="w-7 h-7 rounded-full bg-purple-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">SB</div>
+                      <div className="w-7 h-7 rounded-full bg-emerald-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">RC</div>
+                      <div className="w-7 h-7 rounded-full bg-amber-600 border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">AL</div>
+                      <div className="w-7 h-7 rounded-full bg-[#1e3a5f] border-2 border-[#101c2b] flex items-center justify-center text-[10px] font-bold text-white">+124</div>
+                    </div>
+
+                    <button
+                      onClick={() => setActiveNav('flowbuilder')}
+                      className="w-full py-2 px-3 rounded-xl bg-white/[0.04] hover:bg-[#ff5722]/15 text-[#ff5722] border border-[#ff5722]/30 font-bold text-[11px] flex items-center justify-center gap-1 transition-all"
+                    >
+                      <span>Configurar Triagem Automática →</span>
+                    </button>
+                  </div>
+
+                  {/* Detalhes do Atendimento Ativo */}
+                  {activeTicket ? (
+                    <div className="bg-[#101c2b] border border-white/[0.08] rounded-3xl p-4.5 space-y-4 shadow-xl">
+                      <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+                        <h5 className="text-xs font-bold text-white">Ficha do Solicitante</h5>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/[0.06] text-[#8a9ba8] font-mono">
+                          {activeTicket.status}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-[#8a9ba8]">Prefixo:</span>
+                          <span className="text-white font-bold">#{activeTicket.driver?.prefixo || 'N/A'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#8a9ba8]">Telefone:</span>
+                          <span className="text-white font-mono">{activeTicket.driver?.phone || 'N/A'}</span>
+                        </div>
+                        {activeTicket.driver?.plate && (
+                          <div className="flex justify-between">
+                            <span className="text-[#8a9ba8]">Placa:</span>
+                            <span className="text-amber-400 font-mono font-bold">{activeTicket.driver.plate}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between">
+                          <span className="text-[#8a9ba8]">Fila Atual:</span>
+                          <span className="text-emerald-400 font-semibold">{activeTicket.department?.name || 'Geral'}</span>
+                        </div>
+                      </div>
+
+                      {/* Transferir Fila Button */}
+                      <button
+                        onClick={() => setTransferModalOpen(true)}
+                        className="w-full py-2 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <GitBranch className="w-3.5 h-3.5 text-[#ff5722]" />
+                        <span>Transferir de Fila</span>
+                      </button>
+
+                      {/* Notas Internas Confidenciais */}
+                      <div className="pt-2">
+                        <label className="block text-[11px] font-bold text-white mb-1.5 flex items-center justify-between">
+                          <span>Notas Internas (Equipe)</span>
+                          {notesSavedSuccess && (
+                            <span className="text-[#22c55e] text-[10px]">Salvo!</span>
+                          )}
+                        </label>
+                        <textarea
+                          rows={3}
+                          placeholder="Anotações confidenciais que o motorista não visualiza..."
+                          value={internalNotes}
+                          onChange={(e) => setInternalNotes(e.target.value)}
+                          className="w-full p-2.5 bg-[#0a111a] border border-white/[0.08] rounded-xl text-xs text-white placeholder-[#8a9ba8] focus:outline-none focus:border-[#ff5722] transition-colors resize-none mb-2"
+                        />
+                        <button
+                          onClick={handleSaveNotes}
+                          disabled={notesSaving}
+                          className="w-full py-1.5 px-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-xs font-semibold text-white flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <Save className="w-3.5 h-3.5 text-[#ff5722]" />
+                          <span>{notesSaving ? 'Salvando...' : 'Salvar Anotação'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-3xl bg-[#101c2b] border border-white/[0.06] text-center text-[#8a9ba8] text-xs">
+                      <Info className="w-5 h-5 mx-auto mb-2 text-[#ff5722]" />
+                      Selecione um chamado para ver a ficha completa e notas internas.
+                    </div>
+                  )}
+                </div>
+              </aside>
+            </>
           )}
         </>
       ) : activeNav === 'flowbuilder' ? (
