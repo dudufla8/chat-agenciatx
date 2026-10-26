@@ -7,6 +7,7 @@ git reset --hard origin/main
 docker compose up -d --build
 echo "🗄️ Sincronizando banco de dados (Prisma)..."
 docker compose exec -T app npx prisma db push --accept-data-loss || true
+docker compose exec -T app npm run prisma:seed || true
 echo "=========================================================="
 echo "✅ SISTEMA ATUALIZADO COM SUCESSO!"
 echo "🌐 Acesso: https://chat.agenciatx.ia.br"
