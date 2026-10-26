@@ -26,7 +26,12 @@ export class DriverSsoService {
       const payload = verifyDriverSsoToken(token);
 
       // 2. Fetch driver data from Táxi Digital API / Local Cache
-      const fleetProfile = await taxiDigitalService.getDriverByPrefixo(payload.prefixo);
+      const fleetProfile = await taxiDigitalService.getDriverByPrefixo(payload.prefixo, {
+        name: payload.name,
+        phone: payload.phone,
+        plate: payload.plate,
+        externalId: payload.driver_external_id,
+      });
       if (!fleetProfile) {
         return {
           success: false,

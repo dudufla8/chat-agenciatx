@@ -23,7 +23,10 @@ export interface OperatorTokenPayload {
 export interface DriverSsoIncomingPayload {
   tenant_id: string;
   prefixo: string;
-  driver_external_id: string;
+  driver_external_id?: string;
+  name?: string;
+  phone?: string;
+  plate?: string;
   timestamp: number; // UNIX epoch timestamp
 }
 

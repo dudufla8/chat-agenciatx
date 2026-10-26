@@ -1,0 +1,53 @@
+name: Deploy Automático (VPS Hostinger)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Auto-Deploy no Servidor VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Conectar via SSH e Executar Atualização
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER || 'root' }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script_stop: true
+          script: |
+            echo "=========================================================="
+            echo "🚀 [CI/CD] INICIANDO DEPLOY AUTOMÁTICO ESTILO VERCEL"
+            echo "=========================================================="
+            
+            # Localizar a pasta do projeto na VPS
+            if [ -n "${{ secrets.VPS_PROJECT_DIR }}" ] && [ -d "${{ secrets.VPS_PROJECT_DIR }}" ]; then
+              cd "${{ secrets.VPS_PROJECT_DIR }}"
+            elif [ -d "/root/chat-agenciatx" ]; then
+              cd "/root/chat-agenciatx"
+            elif [ -d "/var/www/chat-agenciatx" ]; then
+              cd "/var/www/chat-agenciatx"
+            elif [ -d "$HOME/chat-agenciatx" ]; then
+              cd "$HOME/chat-agenciatx"
+            else
+              # Procura dinamicamente o diretório que contém update.sh
+              PROJECT_DIR=$(find /root /var/www /home -name "update.sh" -path "*/chat-agenciatx/*" -exec dirname {} \; 2>/dev/null | head -n 1)
+              if [ -n "$PROJECT_DIR" ]; then
+                cd "$PROJECT_DIR"
+              else
+                echo "❌ Diretório do projeto não encontrado na VPS. Defina a secret VPS_PROJECT_DIR."
+                exit 1
+              fi
+            fi
+
+            echo "📁 Diretório ativo: $(pwd)"
+            echo "🔄 Executando bash update.sh..."
+            bash update.sh
+            echo "=========================================================="
+            echo "✅ DEPLOY AUTOMÁTICO CONCLUÍDO COM SUCESSO!"
+            echo "=========================================================="

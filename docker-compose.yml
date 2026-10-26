@@ -14,8 +14,9 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-chave_super_secreta_para_operadores_jwt_987654321}
       DRIVER_SSO_SECRET: ${DRIVER_SSO_SECRET:-chave_compartilhada_com_app_do_motorista_taxi_digital_2026}
-      TAXI_DIGITAL_API_URL: ${TAXI_DIGITAL_API_URL:-https://api.taxidigital.com.br/v1}
-      TAXI_DIGITAL_API_TOKEN: ${TAXI_DIGITAL_API_TOKEN:-token_de_comunicacao_taxi_digital}
+      TAXI_DIGITAL_BASE_URL: ${TAXI_DIGITAL_BASE_URL:-https://api.taxidigital.net/APITD/}
+      TAXI_DIGITAL_USER: ${TAXI_DIGITAL_USER:-apitx20@tx20.com.br}
+      TAXI_DIGITAL_PASS: ${TAXI_DIGITAL_PASS:-15985232}
       DOMAIN_NAME: ${DOMAIN_NAME:-chat.agenciatx.ia.br}
       META_WA_PHONE_NUMBER_ID: ${META_WA_PHONE_NUMBER_ID}
       META_WA_ACCESS_TOKEN: ${META_WA_ACCESS_TOKEN}
