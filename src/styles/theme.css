@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+
+:root {
+  /* Identidade Visual / Tenant Padrão (TX Blue) */
+  --brand-primary: #004ac6;            /* Azul institucional TX */
+  --brand-primary-hover: #003da6;
+  --brand-primary-light: #e8f0fe;      /* Fundo suave de seleção/tags */
+  --brand-primary-contrast: #ffffff;
+  
+  /* Cores Semânticas de Atendimento */
+  --brand-secondary: #006c49;          /* Sucesso, status online, corridas validadas */
+  --brand-warning: #f59e0b;            /* SLAs, fila de espera e alertas */
+  --brand-danger: #ef4444;             /* Chamados urgentes */
+
+  /* Balões de Chat White-Label */
+  --bubble-driver-bg: #004ac6;         /* Balão do motorista preenchido com a cor da marca */
+  --bubble-driver-text: #ffffff;
+  --bubble-attendant-bg: #ffffff;      /* Balão do atendente neutro e limpo */
+  --bubble-attendant-text: #0f172a;
+  --bubble-border: #e2e8f0;
+
+  /* Superfícies Neutras do Sistema */
+  --bg-app: #f8fafc;                   /* Fundo geral da aplicação */
+  --bg-card: #ffffff;                  /* Superfície de cartões e colunas */
+  --text-main: #0f172a;                /* Texto principal */
+  --text-muted: #64748b;               /* Metadados e horários */
+  --border-subtle: #e2e8f0;            /* Divisórias suaves */
+}
+
+/* Material Symbols Helper */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  vertical-align: middle;
+}

@@ -12,7 +12,14 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const ext = path.extname(file.name) || '.jpg';
+    let ext = path.extname(file.name || '').toLowerCase();
+    if (!ext || ext === '.' || ext === '') {
+      if (file.type === 'image/png') ext = '.png';
+      else if (file.type === 'image/webp') ext = '.webp';
+      else if (file.type === 'image/gif') ext = '.gif';
+      else if (file.type === 'application/pdf') ext = '.pdf';
+      else ext = '.jpg';
+    }
     const filename = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}${ext}`;
 
     const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
@@ -24,7 +31,7 @@ export async function POST(req: NextRequest) {
     fs.writeFileSync(filepath, buffer);
 
     const fileUrl = `/uploads/${filename}`;
-    return NextResponse.json({ success: true, url: fileUrl });
+    return NextResponse.json({ success: true, url: fileUrl, filename });
   } catch (err: any) {
     console.error('[Upload API] Error:', err.message);
     return NextResponse.json({ error: 'Falha no upload do arquivo.' }, { status: 500 });

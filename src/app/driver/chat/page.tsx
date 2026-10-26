@@ -3,48 +3,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import {
-  Send,
-  Camera,
-  LogOut,
-  Car,
-  CheckCheck,
-  Bot,
-  UserCheck,
-  Loader2,
-  Clock,
-  CheckCircle2,
-  Headphones,
-  Image as ImageIcon,
-  X,
-  Sparkles
-} from 'lucide-react';
-
-interface Message {
-  id: string;
-  senderType: 'DRIVER' | 'OPERATOR' | 'BOT' | 'SYSTEM';
-  senderId?: string;
-  content: string;
-  mediaUrl?: string | null;
-  createdAt: string | Date;
-}
-
-interface DriverProfile {
-  driverId: string;
-  tenantId: string;
-  prefixo: string;
-  name: string;
-  phone: string;
-  plate?: string;
-}
-
-interface Ticket {
-  id: string;
-  status: string;
-  triageStep?: string;
-  department?: { name: string };
-  operator?: { name: string };
-}
+import { Loader2 } from 'lucide-react';
+import DriverChatMobile, {
+  DriverChatMessage,
+  DriverProfileData,
+  DriverTicketData
+} from '@/components/chat/DriverChatMobile';
 
 // Subtle pleasant chime using Web Audio API
 function playSubtleNotificationSound() {
@@ -56,8 +20,8 @@ function playSubtleNotificationSound() {
     const gain = ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    osc.frequency.exponentialRampToValueAtTime(880.0, ctx.currentTime + 0.15); // A5
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880.0, ctx.currentTime + 0.15);
 
     gain.gain.setValueAtTime(0.12, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
@@ -74,27 +38,16 @@ function playSubtleNotificationSound() {
 
 export default function DriverChatPage() {
   const router = useRouter();
-  const [driver, setDriver] = useState<DriverProfile | null>(null);
-  const [ticket, setTicket] = useState<Ticket | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [inputText, setInputText] = useState('');
+  const [driver, setDriver] = useState<DriverProfileData | null>(null);
+  const [ticket, setTicket] = useState<DriverTicketData | null>(null);
+  const [messages, setMessages] = useState<DriverChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [operatorTyping, setOperatorTyping] = useState(false);
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [showOptionsManual, setShowOptionsManual] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, operatorTyping]);
 
   // Load Driver Session & Ticket
   useEffect(() => {
@@ -145,31 +98,29 @@ export default function DriverChatPage() {
             setConnected(false);
           });
 
-          // Listen to new messages with strict deduplication
-          const receivedIds = new Set<string>();
-          const handleIncomingMsg = (msg: Message) => {
-            if (!msg || !msg.id) return;
-            if (receivedIds.has(msg.id)) return;
-            receivedIds.add(msg.id);
-
-            setMessages((prev) => {
-              const exists = prev.some(
-                (m) => m.id === msg.id || (m.id.startsWith('temp-') && m.content === msg.content)
-              );
-              if (exists) {
-                return prev.map((m) => (m.id.startsWith('temp-') && m.content === msg.content ? msg : m));
-              }
-              return [...prev, msg];
-            });
-
-            if (msg.senderType === 'OPERATOR') {
+          const handleIncomingMsg = (newMsg: DriverChatMessage) => {
+            if (newMsg.senderType === 'OPERATOR') {
               playSubtleNotificationSound();
             }
+
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === newMsg.id)) return prev;
+              const filtered = prev.filter(
+                (m) =>
+                  !(
+                    m.id.startsWith('temp-') &&
+                    m.content === newMsg.content &&
+                    m.senderType === newMsg.senderType
+                  )
+              );
+              return [...filtered, newMsg];
+            });
           };
 
+          socket.on('message:receive', handleIncomingMsg);
           socket.on('new_message', handleIncomingMsg);
 
-          socket.on('ticket_updated', (updatedTicket: Ticket) => {
+          socket.on('ticket_updated', (updatedTicket: DriverTicketData) => {
             setTicket((prev) => ({ ...prev, ...updatedTicket }));
           });
 
@@ -189,10 +140,13 @@ export default function DriverChatPage() {
 
     init();
 
-    // 3-second heartbeat sync safety net in case mobile network drops WebSocket packets
+    // Heartbeat sync safety net for mobile network
     const syncInterval = setInterval(async () => {
       try {
-        const sessionRes = await fetch('/api/auth/driver-session');
+        const localToken = typeof window !== 'undefined' ? localStorage.getItem('driver_session_token') : null;
+        const sessionRes = await fetch('/api/auth/driver-session', {
+          headers: localToken ? { Authorization: `Bearer ${localToken}` } : {},
+        });
         const sessionData = await sessionRes.json();
         if (sessionData.authenticated && sessionData.token) {
           const ticketRes = await fetch('/api/tickets/driver-active', {
@@ -201,7 +155,7 @@ export default function DriverChatPage() {
           const ticketData = await ticketRes.json();
           if (ticketData.ticket?.messages) {
             setMessages((prev) => {
-              const incoming: Message[] = ticketData.ticket.messages;
+              const incoming: DriverChatMessage[] = ticketData.ticket.messages;
               if (incoming.length !== prev.length || incoming[incoming.length - 1]?.id !== prev[prev.length - 1]?.id) {
                 return incoming;
               }
@@ -227,12 +181,12 @@ export default function DriverChatPage() {
 
   // Send Driver Message
   const handleSendMessage = (textToSend?: string, mediaUrl?: string) => {
-    const text = (textToSend || inputText).trim();
+    const text = (textToSend || '').trim();
     if (!text && !mediaUrl) return;
     if (!ticket) return;
 
     // Optimistic message append
-    const tempMsg: Message = {
+    const tempMsg: DriverChatMessage = {
       id: `temp-${Date.now()}`,
       senderType: 'DRIVER',
       content: text || 'Foto enviada',
@@ -242,55 +196,16 @@ export default function DriverChatPage() {
     setMessages((prev) => [...prev, tempMsg]);
 
     if (socketRef.current && socketRef.current.connected) {
-      // Single emit to prevent duplication
       socketRef.current.emit('send_message', {
         ticketId: ticket.id,
         content: text || 'Foto enviada',
         mediaUrl,
       });
     }
-
-    setInputText('');
-  };
-
-  // Support pasting images from clipboard (Ctrl + V / Colar)
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.startsWith('image/')) {
-        const file = items[i].getAsFile();
-        if (file) {
-          e.preventDefault();
-          setUploading(true);
-          try {
-            const formData = new FormData();
-            formData.append('file', file);
-            const res = await fetch('/api/upload', {
-              method: 'POST',
-              body: formData,
-            });
-            const data = await res.json();
-            if (res.ok && data.url) {
-              handleSendMessage('Comprovante / Foto anexada', data.url);
-            }
-          } catch (err) {
-            console.error('Upload on paste error:', err);
-          } finally {
-            setUploading(false);
-          }
-        }
-        break;
-      }
-    }
   };
 
   // Upload photo from camera or file
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleFileUpload = async (file: File) => {
     setUploading(true);
     try {
       const formData = new FormData();
@@ -309,11 +224,10 @@ export default function DriverChatPage() {
       console.error('Upload error:', err);
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  // Exit chat (supports native WebView bridges)
+  // Exit chat
   const handleExitChat = async () => {
     try {
       if ((window as any).ReactNativeWebView?.postMessage) {
@@ -342,27 +256,21 @@ export default function DriverChatPage() {
     }
   };
 
-  const [showOptionsManual, setShowOptionsManual] = useState(false);
-
   // Extract quick options from bot message or default menu
   const extractQuickOptions = () => {
-    // 1. Search backwards for any bot message with options
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.senderType === 'BOT' && msg.content && msg.content.includes('[')) {
-        const lines = msg.content.split('\n');
-        const options: { num: string; text: string }[] = [];
-        lines.forEach((line) => {
-          const match = line.match(/^\[([1-5])\]\s*(.+)/);
-          if (match) {
-            options.push({ num: match[1], text: match[2].trim() });
-          }
-        });
-        if (options.length > 0) return options;
-      }
+    const lastBotMsg = [...messages].reverse().find((m) => m.senderType === 'BOT');
+    if (lastBotMsg?.content) {
+      const lines = lastBotMsg.content.split('\n');
+      const options: { num: string; text: string }[] = [];
+      lines.forEach((line) => {
+        const match = line.match(/^(\d+)\s*[-.)]\s*(.+)/);
+        if (match) {
+          options.push({ num: match[1], text: match[2].trim() });
+        }
+      });
+      if (options.length > 0) return options;
     }
 
-    // 2. Default options if still in triage or user wants menu
     return [
       { num: '1', text: 'Atualização de Cadastro / Veículo' },
       { num: '2', text: 'Corridas & Operacional' },
@@ -376,315 +284,44 @@ export default function DriverChatPage() {
 
   if (loading) {
     return (
-      <div className="h-screen bg-[#060b11] flex flex-col items-center justify-center p-6 text-center text-white">
-        <div className="w-18 h-18 rounded-3xl bg-gradient-to-br from-[#ff5722] via-[#ff6b35] to-[#1e3a5f] p-0.5 mb-5 shadow-2xl shadow-[#ff5722]/30 animate-pulse">
-          <div className="w-full h-full bg-[#0a111a] rounded-[22px] flex items-center justify-center font-black text-xl text-white">
-            TX
-          </div>
+      <div
+        className="h-screen flex flex-col items-center justify-center p-6 text-center select-none"
+        style={{ backgroundColor: 'var(--bg-app)', color: 'var(--text-main)' }}
+      >
+        <div
+          className="w-16 h-16 rounded-3xl flex items-center justify-center font-black text-xl mb-5 shadow-xl animate-pulse"
+          style={{
+            backgroundColor: 'var(--brand-primary)',
+            color: 'var(--brand-primary-contrast)',
+          }}
+        >
+          <span className="material-symbols-outlined text-3xl">local_taxi</span>
         </div>
-        <p className="text-sm font-semibold text-white flex items-center gap-2 mb-2">
-          <Loader2 className="w-4 h-4 animate-spin text-[#ff5722]" />
+        <p className="text-sm font-semibold flex items-center gap-2 mb-2" style={{ color: 'var(--text-main)' }}>
+          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
           Conectando à Central de Atendimento...
         </p>
-        <span className="text-xs text-[#8a9ba8]">Identificando frota e permissões de acesso</span>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          Identificando frota e permissões de acesso
+        </span>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-screen max-w-md mx-auto bg-[#0a111a] border-x border-white/[0.08] shadow-2xl overflow-hidden text-white font-sans antialiased">
-      {/* 1. Header Premium TX */}
-      <header className="flex items-center justify-between px-4 py-3 bg-[#101c2b]/95 border-b border-white/[0.08] backdrop-blur-md sticky top-0 z-20">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#ff5722] via-[#ff6b35] to-[#1e3a5f] flex items-center justify-center font-black text-sm tracking-wider text-white shadow-lg shadow-[#ff5722]/20">
-            TX
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-white tracking-wide">
-                Prefixo #{driver?.prefixo || '---'}
-              </span>
-              <span className="text-xs text-[#8a9ba8]">({driver?.name?.split(' ')[0]})</span>
-            </div>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  connected ? 'bg-[#22c55e] animate-pulse' : 'bg-rose-500'
-                }`}
-              />
-              <span className="text-[11px] font-medium text-[#8a9ba8]">
-                {connected ? 'Conectado à Central' : 'Reconectando...'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <button
-          onClick={handleExitChat}
-          title="Encerrar Sessão"
-          className="p-2 rounded-xl text-[#8a9ba8] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-        >
-          <LogOut className="w-4 h-4" />
-        </button>
-      </header>
-
-      {/* Status Bar Sub-header */}
-      <div className="bg-[#0d1724]/90 px-4 py-2 border-b border-white/[0.06] flex items-center justify-between text-xs backdrop-blur-sm">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[#8a9ba8] text-[11px]">Status:</span>
-          {ticket?.status === 'BOT_TRIAGE' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold text-[11px]">
-              <Bot className="w-3 h-3 text-amber-400" />
-              Triagem Automática
-            </span>
-          )}
-          {ticket?.status === 'WAITING_QUEUE' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#ff5722]/15 border border-[#ff5722]/30 text-[#ff6b35] font-semibold text-[11px]">
-              <Clock className="w-3 h-3 text-[#ff5722]" />
-              Fila de Espera
-            </span>
-          )}
-          {ticket?.status === 'IN_PROGRESS' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold text-[11px]">
-              <Headphones className="w-3 h-3 text-emerald-400" />
-              Atendimento Humano
-            </span>
-          )}
-          {ticket?.status === 'RESOLVED' || ticket?.status === 'CLOSED' ? (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold text-[11px]">
-              <CheckCircle2 className="w-3 h-3 text-blue-400" />
-              Concluído
-            </span>
-          ) : null}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {ticket?.operator?.name && (
-            <span className="text-emerald-400 font-semibold truncate max-w-[120px] text-[11px]">
-              {ticket.operator.name}
-            </span>
-          )}
-          <button
-            onClick={() => setShowOptionsManual(!showOptionsManual)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-[11px] text-amber-300 font-semibold transition-colors"
-          >
-            <Sparkles className="w-3 h-3 text-amber-400" />
-            <span>{showOptionsManual ? 'Fechar Menu' : '📋 Ver Assuntos'}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 2. Messages List */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-[#0a111a]">
-        {messages.map((msg) => {
-          const isDriver = msg.senderType === 'DRIVER';
-          const isBot = msg.senderType === 'BOT';
-          const isSystem = msg.senderType === 'SYSTEM';
-
-          if (isSystem) {
-            return (
-              <div key={msg.id} className="flex justify-center my-2">
-                <span className="px-3.5 py-1 rounded-full bg-[#101c2b] border border-white/[0.08] text-[11px] text-[#8a9ba8] text-center max-w-[90%] shadow-sm">
-                  {msg.content}
-                </span>
-              </div>
-            );
-          }
-
-          return (
-            <div
-              key={msg.id}
-              className={`flex flex-col ${isDriver ? 'items-end' : 'items-start'}`}
-            >
-              {/* Sender Name/Badge */}
-              <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-[#8a9ba8]">
-                {isBot && (
-                  <>
-                    <Bot className="w-3.5 h-3.5 text-[#ff5722]" />
-                    <span className="text-[#ff5722] font-semibold">Assistente Virtual TX</span>
-                  </>
-                )}
-                {!isDriver && !isBot && (
-                  <>
-                    <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
-                    <span className="text-cyan-400 font-semibold">
-                      {ticket?.operator?.name || 'Atendente da Central'}
-                    </span>
-                  </>
-                )}
-                {isDriver && <span>Você (#{driver?.prefixo})</span>}
-              </div>
-
-              {/* Message Bubble */}
-              <div
-                className={`max-w-[88%] rounded-3xl px-4 py-3 text-sm shadow-md whitespace-pre-wrap leading-relaxed ${
-                  isDriver
-                    ? 'bg-gradient-to-r from-[#ff5722] to-[#ff6b35] text-white font-medium rounded-br-xs shadow-[#ff5722]/20'
-                    : isBot
-                    ? 'bg-[#101c2b] border border-white/[0.08] text-slate-100 rounded-bl-xs'
-                    : 'bg-[#132338] border border-[#1e3a5f]/80 text-white rounded-bl-xs'
-                }`}
-              >
-                {/* Imagem / Anexo com tratamento elegante */}
-                {msg.mediaUrl && (
-                  <div
-                    onClick={() => setPreviewImage(msg.mediaUrl || null)}
-                    className="mb-2.5 rounded-2xl overflow-hidden border border-white/[0.1] bg-black/20 cursor-pointer relative group"
-                  >
-                    <img
-                      src={msg.mediaUrl}
-                      alt="Anexo enviado"
-                      className="w-full max-h-56 object-cover transition-transform group-hover:scale-105"
-                      onError={(e) => {
-                        // Fallback elegante caso a URL seja inválida ou remota
-                        (e.target as HTMLElement).style.display = 'none';
-                        const fallback = (e.target as HTMLElement).parentElement?.querySelector('.img-fallback');
-                        if (fallback) fallback.classList.remove('hidden');
-                      }}
-                    />
-                    <div className="img-fallback hidden p-4 text-center bg-[#172535] text-[#8a9ba8] text-xs">
-                      <ImageIcon className="w-6 h-6 mx-auto mb-1 text-[#ff5722]" />
-                      <span>Comprovante / Imagem Anexada</span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="text-sm font-normal">{msg.content}</div>
-
-                <div
-                  className={`text-[10px] mt-1.5 text-right flex items-center justify-end gap-1.5 ${
-                    isDriver ? 'text-white/80' : 'text-[#8a9ba8]'
-                  }`}
-                >
-                  <span>
-                    {new Date(msg.createdAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                  {isDriver && <CheckCheck className="w-3.5 h-3.5 text-white/90" />}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Operator Typing Indicator */}
-        {operatorTyping && (
-          <div className="flex items-center gap-2 text-xs text-cyan-400 italic py-1 px-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-            <span>Atendente digitando resposta...</span>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* 3. Balões interativos para as opções numéricas da triagem */}
-      {quickOptions && (ticket?.status === 'BOT_TRIAGE' || showOptionsManual) && (
-        <div className="p-3 bg-[#101c2b] border-t border-white/[0.08] animate-in slide-in-from-bottom-2 duration-200">
-          <div className="flex items-center justify-between mb-2 px-1">
-            <p className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5" />
-              Escolha uma opção de atendimento:
-            </p>
-            {showOptionsManual && (
-              <button
-                type="button"
-                onClick={() => setShowOptionsManual(false)}
-                className="text-[10px] text-[#8a9ba8] hover:text-white px-2 py-0.5 rounded bg-white/[0.05]"
-              >
-                ✕ Fechar
-              </button>
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto pr-1">
-            {quickOptions.map((opt) => (
-              <button
-                key={opt.num}
-                type="button"
-                onClick={() => {
-                  handleSendMessage(opt.num);
-                  setShowOptionsManual(false);
-                }}
-                className="px-3 py-2 rounded-2xl bg-[#142030] hover:bg-[#ff5722] hover:text-white border border-white/[0.08] hover:border-[#ff5722] text-xs text-slate-200 font-medium transition-all text-left shadow-sm active:scale-98 flex items-center gap-2.5 group"
-              >
-                <span className="w-6 h-6 rounded-xl bg-[#ff5722]/20 text-[#ff5722] group-hover:bg-white group-hover:text-[#ff5722] flex items-center justify-center font-black text-xs transition-colors">
-                  {opt.num}
-                </span>
-                <span className="truncate flex-1">{opt.text}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 4. Bottom Input Bar */}
-      <footer className="p-3 bg-[#101c2b]/95 border-t border-white/[0.08] flex items-center gap-2">
-        {/* Hidden Camera/File Input */}
-        <input
-          type="file"
-          accept="image/*"
-          ref={fileInputRef}
-          onChange={handleFileUpload}
-          className="hidden"
-        />
-
-        <button
-          type="button"
-          disabled={uploading}
-          onClick={() => fileInputRef.current?.click()}
-          title="Tirar foto ou anexar comprovante"
-          className="p-3 rounded-2xl bg-[#172535] hover:bg-[#1e3a5f] text-[#8a9ba8] hover:text-white border border-white/[0.06] transition-all disabled:opacity-50 active:scale-95 flex-shrink-0"
-        >
-          {uploading ? (
-            <Loader2 className="w-4 h-4 animate-spin text-[#ff5722]" />
-          ) : (
-            <Camera className="w-4 h-4" />
-          )}
-        </button>
-
-        <input
-          type="text"
-          placeholder="Digite sua mensagem ou cole uma foto (Ctrl+V)..."
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onPaste={handlePaste}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSendMessage();
-          }}
-          className="flex-1 py-3 px-4 bg-[#0a111a] border border-white/[0.08] focus:border-[#ff5722] rounded-full text-xs text-white placeholder-[#8a9ba8] outline-none transition-colors"
-        />
-
-        <button
-          type="button"
-          onClick={() => handleSendMessage()}
-          disabled={!inputText.trim()}
-          className="p-3 rounded-full bg-gradient-to-r from-[#ff5722] to-[#ff6b35] text-white font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 shadow-md shadow-[#ff5722]/25 flex-shrink-0"
-        >
-          <Send className="w-4 h-4" />
-        </button>
-      </footer>
-
-      {/* Lightbox Modal de Imagem */}
-      {previewImage && (
-        <div
-          onClick={() => setPreviewImage(null)}
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
-        >
-          <button
-            onClick={() => setPreviewImage(null)}
-            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <img
-            src={previewImage}
-            alt="Preview Anexo"
-            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain"
-          />
-        </div>
-      )}
-    </div>
+    <DriverChatMobile
+      driver={driver}
+      ticket={ticket}
+      messages={messages}
+      connected={connected}
+      operatorTyping={operatorTyping}
+      uploading={uploading}
+      onSendMessage={handleSendMessage}
+      onFileUpload={handleFileUpload}
+      onExitChat={handleExitChat}
+      showOptionsManual={showOptionsManual}
+      onToggleOptions={() => setShowOptionsManual(!showOptionsManual)}
+      quickOptions={quickOptions}
+    />
   );
 }

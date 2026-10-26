@@ -3,6 +3,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
+import AttendantDashboard, {
+  AttendantTicket,
+  AttendantOperator,
+} from '@/components/dashboard/AttendantDashboard';
 import {
   MessageSquare,
   Users,
@@ -725,6 +729,40 @@ export default function OperatorDashboardPage() {
 
   const totalUnreadCount = waitingTickets.length;
 
+  const allTickets: AttendantTicket[] = [
+    ...waitingTickets.map((t) => ({ ...t, priority: (t as any).priority || 'NORMAL' })),
+    ...myTickets.map((t) => ({ ...t, priority: (t as any).priority || 'NORMAL' })),
+    ...closedTickets.map((t) => ({ ...t, priority: (t as any).priority || 'NORMAL' })),
+  ] as any;
+
+  if (activeNav === 'chat') {
+    return (
+      <AttendantDashboard
+        operator={operator}
+        tickets={allTickets}
+        activeTicket={activeTicket as any}
+        messages={messages}
+        cannedResponses={cannedResponses}
+        onSelectTicket={handleSelectTicket as any}
+        onSendMessage={sendOperatorMessage}
+        onClaimTicket={() => handleClaimTicket()}
+        onCloseTicket={() => handleCloseTicket()}
+        onTransferTicket={(ticketId, deptId) => {
+          setSelectedTransferDept(deptId);
+          handleTransferTicket();
+        }}
+        onSaveNotes={(ticketId, notes) => {
+          setInternalNotes(notes);
+          handleSaveNotes();
+        }}
+        onOpenAdmin={(view) => setActiveNav(view)}
+        onLogout={handleLogout}
+        departments={departments}
+        cooperativeName="Central Táxi Digital"
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0a111a] text-white font-sans antialiased">
 
@@ -763,14 +801,14 @@ export default function OperatorDashboardPage() {
               onClick={() => setActiveNav('chat')}
               title="Member Chat"
               className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} px-3.5 py-3 rounded-2xl text-xs font-semibold transition-all relative ${
-                activeNav === 'chat'
+                (activeNav as string) === 'chat'
                   ? 'bg-white/[0.08] text-white shadow-inner border border-white/[0.06]'
                   : 'text-[#8a9ba8] hover:text-white hover:bg-white/[0.04]'
               }`}
             >
               <div className="flex items-center gap-3">
-                <MessageSquare className={`w-4 h-4 ${activeNav === 'chat' ? 'text-[#ff5722]' : ''}`} />
-                {!sidebarCollapsed && <span>Member Chat</span>}
+                <MessageSquare className={`w-4 h-4 ${(activeNav as string) === 'chat' ? 'text-[#ff5722]' : ''}`} />
+                {!sidebarCollapsed && <span>Member Chat (3 Colunas)</span>}
               </div>
               {totalUnreadCount > 0 && (
                 <span className={`px-2 py-0.5 rounded-full bg-[#ff5722] text-white text-[10px] font-bold shadow-md shadow-[#ff5722]/30 ${sidebarCollapsed ? 'absolute -top-1 -right-1' : ''}`}>
@@ -922,7 +960,7 @@ export default function OperatorDashboardPage() {
       {/* ÁREA PRINCIPAL: ALTERNA ENTRE CHAT (4 COLUNAS) E TELAS ADMINISTRATIVAS   */}
       {/* ========================================================================= */}
 
-      {activeNav === 'chat' ? (
+      {(activeNav as string) === 'chat' ? (
         <>
           {/* ======================================================================= */}
           {/* COLUNA 2: LISTA DE CONVERSAS (Conversations)                            */}
