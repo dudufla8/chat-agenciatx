@@ -5,6 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: taxi_omnichannel_app
+    restart: always
     ports:
       - "127.0.0.1:3000:3000"
     environment:
