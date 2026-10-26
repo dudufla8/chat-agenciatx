@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     if (!operator) return NextResponse.json({ error: 'Token inválido' }, { status: 401 });
 
     const { searchParams } = new URL(req.url);
-    const ticketId = searchParams.get('ticketId');
+    const ticketId = searchParams.get('ticketId') || searchParams.get('id');
     if (!ticketId) return NextResponse.json({ error: 'ticketId é obrigatório' }, { status: 400 });
 
     let ticket: any;
@@ -28,7 +28,15 @@ export async function GET(req: NextRequest) {
         },
       });
     } catch {
-      // Handled via ticketService memory fallback if DB is offline
+      // Continue to check memory fallback
+    }
+
+    if (!ticket) {
+      const { ticketService } = await import('@/modules/tickets/ticketService');
+      const mem = ticketService.getTicketById(ticketId);
+      if (mem) {
+        ticket = mem;
+      }
     }
 
     if (!ticket) {

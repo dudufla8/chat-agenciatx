@@ -66,6 +66,7 @@ export function initSocketServer(server: HttpServer): SocketIOServer {
     socket.on('ticket:join', handleJoinTicket);
 
     // 4. Message Sender (Supports send_message and message:send)
+    const recentMessages = new Set<string>();
     const handleMessageSend = async ({
       ticketId,
       content,
@@ -81,6 +82,14 @@ export function initSocketServer(server: HttpServer): SocketIOServer {
     }) => {
       try {
         if (!ticketId || (!content && !mediaUrl)) return;
+
+        // Deduplication safety net
+        const dedupKey = `${socket.id}:${ticketId}:${(content || '').trim()}:${mediaUrl || ''}`;
+        if (recentMessages.has(dedupKey)) {
+          return;
+        }
+        recentMessages.add(dedupKey);
+        setTimeout(() => recentMessages.delete(dedupKey), 2000);
 
         const isOperator = userType === 'OPERATOR' || senderType === 'OPERATOR';
 

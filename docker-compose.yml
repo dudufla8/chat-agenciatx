@@ -22,6 +22,8 @@ services:
       META_WA_PHONE_NUMBER_ID: ${META_WA_PHONE_NUMBER_ID}
       META_WA_ACCESS_TOKEN: ${META_WA_ACCESS_TOKEN}
       META_WA_WEBHOOK_VERIFY_TOKEN: ${META_WA_WEBHOOK_VERIFY_TOKEN}
+    volumes:
+      - ./public/uploads:/app/public/uploads
     depends_on:
       postgres:
         condition: service_healthy

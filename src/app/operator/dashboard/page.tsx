@@ -189,9 +189,18 @@ export default function OperatorDashboardPage() {
   // Canned Filter Dropdown in Chat
   const [cannedFiltered, setCannedFiltered] = useState<CannedResponse[]>([]);
   const [showCannedDropdown, setShowCannedDropdown] = useState(false);
+  const [operatorUploading, setOperatorUploading] = useState(false);
+  const [operatorPreviewImage, setOperatorPreviewImage] = useState<string | null>(null);
+  const [driverLinkModalOpen, setDriverLinkModalOpen] = useState(false);
+  const [linkPrefixo, setLinkPrefixo] = useState('');
+  const [linkPlate, setLinkPlate] = useState('');
+  const [linkPhone, setLinkPhone] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [activeTicketLinkCopied, setActiveTicketLinkCopied] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const operatorFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // 1. Initial Data Fetch
   const fetchDashboardData = async () => {
@@ -274,11 +283,17 @@ export default function OperatorDashboardPage() {
       }
     });
 
-    // Listen to new messages from driver or bot
+    // Listen to new messages from driver or bot with deduplication
+    const receivedIds = new Set<string>();
     const handleIncomingMessage = (data: any) => {
+      if (!data || !data.id) return;
+      if (receivedIds.has(data.id)) return;
+      receivedIds.add(data.id);
+
       if (activeTicket && (data.ticketId === activeTicket.id || !data.ticketId)) {
         setMessages((prev) => {
-          if (prev.some((m) => m.id === data.id || (m.id.startsWith('temp-') && m.content === data.content))) {
+          const exists = prev.some((m) => m.id === data.id || (m.id.startsWith('temp-') && m.content === data.content));
+          if (exists) {
             return prev.map((m) => (m.id.startsWith('temp-') && m.content === data.content ? data : m));
           }
           return [...prev, data];
@@ -288,7 +303,6 @@ export default function OperatorDashboardPage() {
     };
 
     socket.on('new_message', handleIncomingMessage);
-    socket.on('ticket:message', handleIncomingMessage);
     socket.on('dashboard_refresh', () => fetchDashboardData());
     socket.on('queue_new_ticket', () => fetchDashboardData());
     socket.on('ticket_updated', (updated: any) => {
@@ -309,7 +323,7 @@ export default function OperatorDashboardPage() {
     const syncInterval = setInterval(() => {
       fetchDashboardData();
       if (activeTicket) {
-        fetch(`/api/operator/ticket-details?id=${activeTicket.id}`)
+        fetch(`/api/operator/ticket-details?ticketId=${activeTicket.id}`)
           .then((r) => r.json())
           .then((data) => {
             if (data.success && data.ticket?.messages) {
@@ -341,14 +355,14 @@ export default function OperatorDashboardPage() {
     }
 
     try {
-      const res = await fetch(`/api/operator/ticket-details?id=${ticket.id}`);
+      const res = await fetch(`/api/operator/ticket-details?ticketId=${ticket.id}`);
       const data = await res.json();
       if (data.success && data.ticket) {
         setActiveTicket(data.ticket);
         setMessages(data.ticket.messages || []);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching ticket details:', err);
     }
   };
 
@@ -379,22 +393,19 @@ export default function OperatorDashboardPage() {
     setShowCannedDropdown(false);
   };
 
-  // Send Message (Both Socket Events Supported)
-  const handleSendMessage = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!inputText.trim() || !activeTicket || !operator) return;
+  // Send Operator Message
+  const sendOperatorMessage = (text?: string, mediaUrl?: string) => {
+    if (!activeTicket || !operator) return;
+    const content = (text || '').trim();
+    if (!content && !mediaUrl) return;
 
-    const textToSend = inputText.trim();
-    setInputText('');
-    setShowCannedDropdown(false);
-
-    // Optimistic append
     const tempMsg = {
       id: `temp-op-${Date.now()}`,
       ticketId: activeTicket.id,
       senderType: 'OPERATOR',
       senderId: operator.userId,
-      content: textToSend,
+      content: content || 'Comprovante / Anexo enviado',
+      mediaUrl,
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, tempMsg]);
@@ -402,16 +413,78 @@ export default function OperatorDashboardPage() {
     if (socketRef.current) {
       socketRef.current.emit('send_message', {
         ticketId: activeTicket.id,
-        content: textToSend,
+        content: content || 'Comprovante / Anexo enviado',
+        mediaUrl,
         senderType: 'OPERATOR',
         senderId: operator.userId,
       });
-      socketRef.current.emit('message:send', {
-        ticketId: activeTicket.id,
-        content: textToSend,
-        senderType: 'OPERATOR',
-        senderId: operator.userId,
+    }
+  };
+
+  const handleSendMessage = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!inputText.trim()) return;
+    const textToSend = inputText.trim();
+    setInputText('');
+    setShowCannedDropdown(false);
+    sendOperatorMessage(textToSend);
+  };
+
+  // Upload file from operator computer
+  const handleOperatorFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setOperatorUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
       });
+      const data = await res.json();
+      if (res.ok && data.url) {
+        sendOperatorMessage('Comprovante / Anexo enviado', data.url);
+      }
+    } catch (err) {
+      console.error('Operator upload error:', err);
+    } finally {
+      setOperatorUploading(false);
+      if (operatorFileInputRef.current) operatorFileInputRef.current.value = '';
+    }
+  };
+
+  // Paste image from clipboard (Ctrl + V / Colar)
+  const handleOperatorPaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        const file = items[i].getAsFile();
+        if (file) {
+          e.preventDefault();
+          setOperatorUploading(true);
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const res = await fetch('/api/upload', {
+              method: 'POST',
+              body: formData,
+            });
+            const data = await res.json();
+            if (res.ok && data.url) {
+              sendOperatorMessage('Imagem anexada pelo atendente', data.url);
+            }
+          } catch (err) {
+            console.error('Operator paste error:', err);
+          } finally {
+            setOperatorUploading(false);
+          }
+        }
+        break;
+      }
     }
   };
 
@@ -990,14 +1063,29 @@ export default function OperatorDashboardPage() {
             </div>
 
             {/* Rodapé da Coluna */}
-            <div className="p-3 border-t border-white/[0.08]">
+            <div className="p-3 border-t border-white/[0.08] space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setLinkPrefixo('');
+                  setLinkPlate('');
+                  setLinkPhone('');
+                  setCopiedLink(false);
+                  setDriverLinkModalOpen(true);
+                }}
+                className="w-full py-2.5 px-3 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/25 text-emerald-400 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-sm"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Gerar Link de Chat (WhatsApp)</span>
+              </button>
+
               <a
                 href="/driver/signup"
                 target="_blank"
-                className="w-full py-2.5 px-3 rounded-2xl border border-white/[0.08] hover:border-[#ff5722]/50 hover:bg-white/[0.03] text-[#8a9ba8] hover:text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
+                className="w-full py-2 px-3 rounded-2xl border border-white/[0.08] hover:border-[#ff5722]/50 hover:bg-white/[0.03] text-[#8a9ba8] hover:text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
               >
                 <Plus className="w-3.5 h-3.5 text-[#ff5722]" />
-                <span>+ Novo Atendimento / Cadastro</span>
+                <span>+ Novo Cadastro de Motorista</span>
               </a>
             </div>
           </section>
@@ -1043,20 +1131,6 @@ export default function OperatorDashboardPage() {
 
                   {/* Ações Rápidas no Header */}
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => alert(`Iniciando chamada para: ${activeTicket.driver?.phone || 'Motorista'}`)}
-                      className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#ff6b35] transition-colors"
-                      title="Chamada de Voz"
-                    >
-                      <Phone className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => alert('Recurso de vídeo disponível na versão corporativa')}
-                      className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#ff6b35] transition-colors"
-                      title="Chamada de Vídeo"
-                    >
-                      <Video className="w-4 h-4" />
-                    </button>
                     <button
                       onClick={() => setShowRightDetails(!showRightDetails)}
                       className={`p-2.5 rounded-xl transition-colors ${
@@ -1135,6 +1209,20 @@ export default function OperatorDashboardPage() {
                                   : 'bg-[#142030] text-slate-100 border border-white/[0.06] rounded-bl-xs'
                               }`}
                             >
+                              {/* Imagem / Anexo com clique para zoom */}
+                              {msg.mediaUrl && (
+                                <div
+                                  onClick={() => setOperatorPreviewImage(msg.mediaUrl)}
+                                  className="mb-2 rounded-2xl overflow-hidden border border-white/[0.1] bg-black/30 cursor-pointer max-w-sm group/img relative"
+                                >
+                                  <img
+                                    src={msg.mediaUrl}
+                                    alt="Anexo enviado"
+                                    className="w-full max-h-56 object-cover transition-transform group-hover/img:scale-105"
+                                  />
+                                </div>
+                              )}
+
                               <p className="whitespace-pre-wrap">{msg.content}</p>
 
                               {/* Timestamp e Status */}
@@ -1204,23 +1292,38 @@ export default function OperatorDashboardPage() {
                   )}
 
                   <form onSubmit={handleSendMessage} className="flex items-center gap-2.5">
+                    {/* Input de arquivo real oculto */}
+                    <input
+                      type="file"
+                      ref={operatorFileInputRef}
+                      onChange={handleOperatorFileUpload}
+                      accept="image/*,application/pdf"
+                      className="hidden"
+                    />
+
                     {/* Botão de Anexo */}
                     <button
                       type="button"
-                      onClick={() => alert('Envio de anexos liberado para fotos e documentos')}
-                      className="p-2.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white transition-colors"
-                      title="Anexar arquivo"
+                      disabled={operatorUploading}
+                      onClick={() => operatorFileInputRef.current?.click()}
+                      className="p-2.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white transition-colors disabled:opacity-50"
+                      title="Anexar arquivo ou foto"
                     >
-                      <Paperclip className="w-4 h-4" />
+                      {operatorUploading ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-[#ff5722]" />
+                      ) : (
+                        <Paperclip className="w-4 h-4" />
+                      )}
                     </button>
 
                     {/* Input Pill */}
                     <div className="flex-1 relative flex items-center">
                       <input
                         type="text"
-                        placeholder="Type a message... (digite / para respostas rápidas)"
+                        placeholder="Digite uma mensagem ou cole uma foto (Ctrl+V)..."
                         value={inputText}
                         onChange={handleInputChange}
+                        onPaste={handleOperatorPaste}
                         className="w-full pl-4 pr-10 py-3 bg-[#0a111a] border border-white/[0.08] rounded-full text-xs text-white placeholder-[#8a9ba8] focus:outline-none focus:border-[#ff5722] transition-colors"
                       />
                       <button
@@ -1379,6 +1482,40 @@ export default function OperatorDashboardPage() {
                         <GitBranch className="w-3.5 h-3.5 text-[#ff5722]" />
                         <span>Transferir de Fila</span>
                       </button>
+
+                      {/* Link Direto do Motorista (WhatsApp) */}
+                      <div className="pt-2 border-t border-white/[0.08] space-y-1.5">
+                        <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">
+                          Link de Acesso do Motorista
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const domain = typeof window !== 'undefined' ? window.location.origin : 'https://chat.agenciatx.ia.br';
+                            const url = `${domain}/driver/login?prefixo=${activeTicket.driver?.prefixo || ''}&placa=${encodeURIComponent(activeTicket.driver?.plate || '')}`;
+                            navigator.clipboard.writeText(url);
+                            setActiveTicketLinkCopied(true);
+                            setTimeout(() => setActiveTicketLinkCopied(false), 3000);
+                          }}
+                          className="w-full py-2 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>{activeTicketLinkCopied ? '✓ Link Copiado!' : 'Copiar Link para WhatsApp'}</span>
+                        </button>
+
+                        {activeTicket.driver?.phone && (
+                          <a
+                            href={`https://wa.me/55${activeTicket.driver.phone.replace(/\D/g, '')}?text=${encodeURIComponent(
+                              `Olá ${activeTicket.driver.name?.split(' ')[0] || ''}! Para acessar o atendimento da Central em tempo real pelo seu celular, clique no link seguro: https://chat.agenciatx.ia.br/driver/login?prefixo=${activeTicket.driver.prefixo}&placa=${activeTicket.driver.plate || ''}`
+                            )}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full py-1.5 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#8a9ba8] hover:text-white text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <span>Abrir no WhatsApp Web →</span>
+                          </a>
+                        )}
+                      </div>
 
                       {/* Notas Internas Confidenciais */}
                       <div className="pt-2">
@@ -1856,6 +1993,138 @@ export default function OperatorDashboardPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox Modal de Imagem do Operador */}
+      {operatorPreviewImage && (
+        <div
+          onClick={() => setOperatorPreviewImage(null)}
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 cursor-pointer"
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <img
+              src={operatorPreviewImage}
+              alt="Anexo Ampliado"
+              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+            />
+            <button
+              onClick={() => setOperatorPreviewImage(null)}
+              className="absolute -top-3 -right-3 p-2 bg-[#ff5722] text-white rounded-full shadow-lg hover:scale-110 transition-transform"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Gerador de Link Direto de Atendimento (WhatsApp) */}
+      {driverLinkModalOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#101c2b] border border-white/[0.1] rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">
+                  TX
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Link Direto para WhatsApp</h3>
+                  <span className="text-[11px] text-[#8a9ba8]">Envie o link para o motorista falar com a central</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setDriverLinkModalOpen(false)}
+                className="text-[#8a9ba8] hover:text-white p-1 rounded-lg hover:bg-white/[0.05]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[#8a9ba8] mb-1 font-semibold">Prefixo do Motorista *</label>
+                <input
+                  type="text"
+                  placeholder="Ex: 101"
+                  value={linkPrefixo}
+                  onChange={(e) => setLinkPrefixo(e.target.value)}
+                  className="w-full p-2.5 bg-[#0a111a] border border-white/[0.08] rounded-xl text-white font-bold focus:outline-none focus:border-[#ff5722]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[#8a9ba8] mb-1 font-semibold">Placa do Veículo (opcional)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: BRA-2E19"
+                  value={linkPlate}
+                  onChange={(e) => setLinkPlate(e.target.value.toUpperCase())}
+                  className="w-full p-2.5 bg-[#0a111a] border border-white/[0.08] rounded-xl text-white uppercase focus:outline-none focus:border-[#ff5722]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[#8a9ba8] mb-1 font-semibold">Telefone / WhatsApp do Motorista (opcional)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: 11987654321"
+                  value={linkPhone}
+                  onChange={(e) => setLinkPhone(e.target.value)}
+                  className="w-full p-2.5 bg-[#0a111a] border border-white/[0.08] rounded-xl text-white focus:outline-none focus:border-[#ff5722]"
+                />
+              </div>
+
+              {/* Link Gerado */}
+              <div className="pt-2">
+                <label className="block text-[11px] font-bold text-amber-400 mb-1">
+                  Link Seguro Gerado:
+                </label>
+                <div className="p-2.5 bg-[#0a111a] border border-white/[0.06] rounded-xl font-mono text-[11px] text-slate-300 break-all select-all">
+                  {typeof window !== 'undefined' ? window.location.origin : 'https://chat.agenciatx.ia.br'}
+                  /driver/login
+                  {linkPrefixo.trim() ? `?prefixo=${encodeURIComponent(linkPrefixo.trim())}` : ''}
+                  {linkPlate.trim() ? `${linkPrefixo.trim() ? '&' : '?'}placa=${encodeURIComponent(linkPlate.trim())}` : ''}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const domain = typeof window !== 'undefined' ? window.location.origin : 'https://chat.agenciatx.ia.br';
+                  let url = `${domain}/driver/login`;
+                  const params: string[] = [];
+                  if (linkPrefixo.trim()) params.push(`prefixo=${encodeURIComponent(linkPrefixo.trim())}`);
+                  if (linkPlate.trim()) params.push(`placa=${encodeURIComponent(linkPlate.trim())}`);
+                  if (params.length > 0) url += `?${params.join('&')}`;
+
+                  navigator.clipboard.writeText(url);
+                  setCopiedLink(true);
+                  setTimeout(() => setCopiedLink(false), 3000);
+                }}
+                className="w-full py-3 rounded-2xl bg-gradient-to-r from-[#ff5722] to-[#ff6b35] text-white font-bold text-xs shadow-lg shadow-[#ff5722]/20 flex items-center justify-center gap-1.5 transition-all active:scale-98"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>{copiedLink ? '✓ Link Copiado com Sucesso!' : 'Copiar Link para WhatsApp'}</span>
+              </button>
+
+              {linkPhone.replace(/\D/g, '') && (
+                <a
+                  href={`https://wa.me/55${linkPhone.replace(/\D/g, '')}?text=${encodeURIComponent(
+                    `Olá! Para acessar o canal de suporte da Central pelo celular, clique no link: ${
+                      typeof window !== 'undefined' ? window.location.origin : 'https://chat.agenciatx.ia.br'
+                    }/driver/login?prefixo=${linkPrefixo.trim()}&placa=${linkPlate.trim()}`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all text-center shadow-lg shadow-emerald-600/20"
+                >
+                  <span>Abrir Conversa no WhatsApp Web →</span>
+                </a>
+              )}
+            </div>
           </div>
         </div>
       )}

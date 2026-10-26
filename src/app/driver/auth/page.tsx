@@ -21,10 +21,10 @@ function DriverAuthContent() {
       return;
     }
 
-    // Missing Token
+    // Missing Token -> Forward to Web Driver Login
     if (!token) {
-      setLoading(false);
-      setError('Acesso restrito. Abra o chat pelo aplicativo do motorista.');
+      const q = searchParams.toString();
+      router.replace('/driver/login' + (q ? `?${q}` : ''));
       return;
     }
 

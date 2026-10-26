@@ -26,6 +26,10 @@ export interface InMemoryTicket {
 const MEMORY_TICKETS = new Map<string, InMemoryTicket>();
 
 export class TicketService {
+  getTicketById(ticketId: string): InMemoryTicket | undefined {
+    return MEMORY_TICKETS.get(ticketId);
+  }
+
   private getOrCreateActiveTicketMemory(driver: {
     id: string;
     tenantId: string;

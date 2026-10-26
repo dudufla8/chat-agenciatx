@@ -102,16 +102,19 @@ export default function DriverChatPage() {
 
     async function init() {
       try {
-        const sessionRes = await fetch('/api/auth/driver-session');
+        const localToken = typeof window !== 'undefined' ? localStorage.getItem('driver_session_token') : null;
+        const sessionRes = await fetch('/api/auth/driver-session', {
+          headers: localToken ? { Authorization: `Bearer ${localToken}` } : {},
+        });
         const sessionData = await sessionRes.json();
 
         if (!sessionRes.ok || !sessionData.authenticated) {
-          router.replace('/driver/auth');
+          router.replace('/driver/login');
           return;
         }
 
         const driverData = sessionData.driver;
-        const sessionToken = sessionData.token;
+        const sessionToken = sessionData.token || localToken;
         setDriver(driverData);
 
         // Fetch or create ticket
@@ -142,10 +145,17 @@ export default function DriverChatPage() {
             setConnected(false);
           });
 
+          // Listen to new messages with strict deduplication
+          const receivedIds = new Set<string>();
           const handleIncomingMsg = (msg: Message) => {
+            if (!msg || !msg.id) return;
+            if (receivedIds.has(msg.id)) return;
+            receivedIds.add(msg.id);
+
             setMessages((prev) => {
-              // Deduplicate or replace optimistic temp message
-              const exists = prev.some((m) => m.id === msg.id || (m.id.startsWith('temp-') && m.content === msg.content));
+              const exists = prev.some(
+                (m) => m.id === msg.id || (m.id.startsWith('temp-') && m.content === msg.content)
+              );
               if (exists) {
                 return prev.map((m) => (m.id.startsWith('temp-') && m.content === msg.content ? msg : m));
               }
@@ -158,7 +168,6 @@ export default function DriverChatPage() {
           };
 
           socket.on('new_message', handleIncomingMsg);
-          socket.on('ticket:message', handleIncomingMsg);
 
           socket.on('ticket_updated', (updatedTicket: Ticket) => {
             setTicket((prev) => ({ ...prev, ...updatedTicket }));
@@ -233,12 +242,8 @@ export default function DriverChatPage() {
     setMessages((prev) => [...prev, tempMsg]);
 
     if (socketRef.current && socketRef.current.connected) {
+      // Single emit to prevent duplication
       socketRef.current.emit('send_message', {
-        ticketId: ticket.id,
-        content: text || 'Foto enviada',
-        mediaUrl,
-      });
-      socketRef.current.emit('message:send', {
         ticketId: ticket.id,
         content: text || 'Foto enviada',
         mediaUrl,
@@ -246,6 +251,39 @@ export default function DriverChatPage() {
     }
 
     setInputText('');
+  };
+
+  // Support pasting images from clipboard (Ctrl + V / Colar)
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        const file = items[i].getAsFile();
+        if (file) {
+          e.preventDefault();
+          setUploading(true);
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const res = await fetch('/api/upload', {
+              method: 'POST',
+              body: formData,
+            });
+            const data = await res.json();
+            if (res.ok && data.url) {
+              handleSendMessage('Comprovante / Foto anexada', data.url);
+            }
+          } catch (err) {
+            console.error('Upload on paste error:', err);
+          } finally {
+            setUploading(false);
+          }
+        }
+        break;
+      }
+    }
   };
 
   // Upload photo from camera or file
@@ -295,27 +333,43 @@ export default function DriverChatPage() {
     }
 
     if (confirm('Deseja realmente encerrar a sessão de atendimento?')) {
+      try {
+        localStorage.removeItem('driver_session_token');
+        localStorage.removeItem('driver_profile');
+      } catch {}
       await fetch('/api/auth/driver-session', { method: 'DELETE' });
-      router.replace('/driver/auth');
+      router.replace('/driver/login');
     }
   };
 
-  // Extract quick options from the latest bot message if present
+  const [showOptionsManual, setShowOptionsManual] = useState(false);
+
+  // Extract quick options from bot message or default menu
   const extractQuickOptions = () => {
-    const lastMsg = messages[messages.length - 1];
-    if (!lastMsg || lastMsg.senderType !== 'BOT') return null;
-
-    const lines = lastMsg.content.split('\n');
-    const options: { num: string; text: string }[] = [];
-
-    lines.forEach((line) => {
-      const match = line.match(/^\[([1-5])\]\s*(.+)/);
-      if (match) {
-        options.push({ num: match[1], text: match[2] });
+    // 1. Search backwards for any bot message with options
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.senderType === 'BOT' && msg.content && msg.content.includes('[')) {
+        const lines = msg.content.split('\n');
+        const options: { num: string; text: string }[] = [];
+        lines.forEach((line) => {
+          const match = line.match(/^\[([1-5])\]\s*(.+)/);
+          if (match) {
+            options.push({ num: match[1], text: match[2].trim() });
+          }
+        });
+        if (options.length > 0) return options;
       }
-    });
+    }
 
-    return options.length > 0 ? options : null;
+    // 2. Default options if still in triage or user wants menu
+    return [
+      { num: '1', text: 'Atualização de Cadastro / Veículo' },
+      { num: '2', text: 'Corridas & Operacional' },
+      { num: '3', text: 'Novo Cadastro - Quero me credenciar' },
+      { num: '4', text: 'Dúvidas Gerais / Outros Assuntos' },
+      { num: '5', text: 'Financeiro & Pagamentos / PIX' },
+    ];
   };
 
   const quickOptions = extractQuickOptions();
@@ -404,11 +458,20 @@ export default function DriverChatPage() {
           ) : null}
         </div>
 
-        {ticket?.operator?.name && (
-          <span className="text-emerald-400 font-semibold truncate max-w-[150px] text-[11px]">
-            {ticket.operator.name}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {ticket?.operator?.name && (
+            <span className="text-emerald-400 font-semibold truncate max-w-[120px] text-[11px]">
+              {ticket.operator.name}
+            </span>
+          )}
+          <button
+            onClick={() => setShowOptionsManual(!showOptionsManual)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-[11px] text-amber-300 font-semibold transition-colors"
+          >
+            <Sparkles className="w-3 h-3 text-amber-400" />
+            <span>{showOptionsManual ? 'Fechar Menu' : '📋 Ver Assuntos'}</span>
+          </button>
+        </div>
       </div>
 
       {/* 2. Messages List */}
@@ -518,17 +581,32 @@ export default function DriverChatPage() {
       </div>
 
       {/* 3. Balões interativos para as opções numéricas da triagem */}
-      {quickOptions && ticket?.status === 'BOT_TRIAGE' && (
-        <div className="p-3 bg-[#101c2b] border-t border-white/[0.08]">
-          <p className="text-[11px] font-semibold text-amber-400 mb-2 px-1 flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5" />
-            Toque para escolher uma opção rápida:
-          </p>
-          <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+      {quickOptions && (ticket?.status === 'BOT_TRIAGE' || showOptionsManual) && (
+        <div className="p-3 bg-[#101c2b] border-t border-white/[0.08] animate-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-center justify-between mb-2 px-1">
+            <p className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              Escolha uma opção de atendimento:
+            </p>
+            {showOptionsManual && (
+              <button
+                type="button"
+                onClick={() => setShowOptionsManual(false)}
+                className="text-[10px] text-[#8a9ba8] hover:text-white px-2 py-0.5 rounded bg-white/[0.05]"
+              >
+                ✕ Fechar
+              </button>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto pr-1">
             {quickOptions.map((opt) => (
               <button
                 key={opt.num}
-                onClick={() => handleSendMessage(opt.num)}
+                type="button"
+                onClick={() => {
+                  handleSendMessage(opt.num);
+                  setShowOptionsManual(false);
+                }}
                 className="px-3 py-2 rounded-2xl bg-[#142030] hover:bg-[#ff5722] hover:text-white border border-white/[0.08] hover:border-[#ff5722] text-xs text-slate-200 font-medium transition-all text-left shadow-sm active:scale-98 flex items-center gap-2.5 group"
               >
                 <span className="w-6 h-6 rounded-xl bg-[#ff5722]/20 text-[#ff5722] group-hover:bg-white group-hover:text-[#ff5722] flex items-center justify-center font-black text-xs transition-colors">
@@ -568,9 +646,10 @@ export default function DriverChatPage() {
 
         <input
           type="text"
-          placeholder="Digite sua mensagem ou o número..."
+          placeholder="Digite sua mensagem ou cole uma foto (Ctrl+V)..."
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
+          onPaste={handlePaste}
           onKeyDown={(e) => {
             if (e.key === 'Enter') handleSendMessage();
           }}

@@ -27,6 +27,29 @@ async function startServer() {
 
     const server = http.createServer((req, res) => {
       const parsedUrl = parse(req.url!, true);
+      const pathname = parsedUrl.pathname || '';
+
+      if (pathname.startsWith('/uploads/')) {
+        const filename = path.basename(pathname);
+        const filepath = path.join(process.cwd(), 'public', 'uploads', filename);
+        if (fs.existsSync(filepath)) {
+          const ext = path.extname(filename).toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.svg': 'image/svg+xml',
+            '.pdf': 'application/pdf',
+          };
+          res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          fs.createReadStream(filepath).pipe(res);
+          return;
+        }
+      }
+
       handle(req, res, parsedUrl);
     });
 
