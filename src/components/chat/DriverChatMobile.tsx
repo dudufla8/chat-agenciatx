@@ -110,6 +110,30 @@ export default function DriverChatMobile({
     return () => window.removeEventListener('paste', handleWindowPaste);
   }, [onSendMessage]);
 
+  // Load custom white-label tenant theme if saved
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('tx_whitelabel_config');
+      if (saved) {
+        const config = JSON.parse(saved);
+        const root = document.documentElement;
+        if (config.primaryColor) {
+          root.style.setProperty('--brand-primary', config.primaryColor);
+          root.style.setProperty('--brand-primary-hover', config.primaryColor);
+        }
+        if (config.secondaryColor) {
+          root.style.setProperty('--brand-secondary', config.secondaryColor);
+        }
+        if (config.driverBubbleColor) {
+          root.style.setProperty('--bubble-driver', config.driverBubbleColor);
+          root.style.setProperty('--bubble-driver-bg', config.driverBubbleColor);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const handleSend = () => {
     const text = inputText.trim();
     if (!text && !isUploading) return;

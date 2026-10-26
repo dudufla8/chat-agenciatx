@@ -11,12 +11,15 @@
   --brand-secondary: #006c49;          /* Sucesso, status online, corridas validadas */
   --brand-warning: #f59e0b;            /* SLAs, fila de espera e alertas */
   --brand-danger: #ef4444;             /* Chamados urgentes */
+  --brand-urgent: #ba1a1a;             /* Urgência SLA Stitch */
 
   /* Balões de Chat White-Label */
+  --bubble-driver: #004ac6;
   --bubble-driver-bg: #004ac6;         /* Balão do motorista preenchido com a cor da marca */
   --bubble-driver-text: #ffffff;
   --bubble-attendant-bg: #ffffff;      /* Balão do atendente neutro e limpo */
   --bubble-attendant-text: #0f172a;
+  --bubble-agent: #eaedff;             /* Balão do agente Stitch */
   --bubble-border: #e2e8f0;
 
   /* Superfícies Neutras do Sistema */
@@ -26,6 +29,14 @@
   --text-muted: #64748b;               /* Metadados e horários */
   --border-subtle: #e2e8f0;            /* Divisórias suaves */
 }
+
+/* Utilitários dinâmicos de Preview White-Label */
+.preview-brand-bg { background-color: var(--brand-primary); }
+.preview-brand-text { color: var(--brand-primary); }
+.preview-brand-border { border-color: var(--brand-primary); }
+.preview-secondary-bg { background-color: var(--brand-secondary); }
+.preview-bubble-driver { background-color: var(--bubble-driver-bg, var(--brand-primary)); }
+.preview-bubble-agent { background-color: var(--bubble-agent, #eaedff); }
 
 /* Material Symbols Helper */
 .material-symbols-outlined {

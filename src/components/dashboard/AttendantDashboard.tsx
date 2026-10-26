@@ -57,7 +57,7 @@ interface AttendantDashboardProps {
   onCloseTicket: (ticketId: string) => void;
   onTransferTicket?: (ticketId: string, departmentId: string) => void;
   onSaveNotes?: (ticketId: string, notes: string) => void;
-  onOpenAdmin?: (view: 'flowbuilder' | 'team' | 'queues') => void;
+  onOpenAdmin?: (view: 'flowbuilder' | 'team' | 'queues' | 'whitelabel') => void;
   onLogout?: () => void;
   cooperativeName?: string;
   departments?: { id: string; name: string }[];
@@ -410,6 +410,23 @@ export default function AttendantDashboard({
                 <span>Equipe & Acessos</span>
               </div>
               <span className="text-[10px] font-bold" style={{ color: 'var(--text-muted)' }}>Gestão</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenAdmin('whitelabel')}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold border transition-all hover:opacity-85"
+              style={{
+                backgroundColor: 'var(--bg-app)',
+                borderColor: 'var(--border-subtle)',
+                color: 'var(--text-main)',
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-base">palette</span>
+                <span>Tema White-Label</span>
+              </div>
+              <span className="text-[10px] font-bold" style={{ color: 'var(--brand-primary)' }}>Cores</span>
             </button>
           </div>
         )}

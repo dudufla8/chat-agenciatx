@@ -7,6 +7,7 @@ import AttendantDashboard, {
   AttendantTicket,
   AttendantOperator,
 } from '@/components/dashboard/AttendantDashboard';
+import WhiteLabelConfig from '@/components/admin/WhiteLabelConfig';
 import {
   MessageSquare,
   Users,
@@ -121,8 +122,8 @@ interface FlowNode {
 export default function OperatorDashboardPage() {
   const router = useRouter();
 
-  // Navigation Views: 'chat' | 'flowbuilder' | 'team' | 'queues' | 'canned'
-  const [activeNav, setActiveNav] = useState<'chat' | 'flowbuilder' | 'team' | 'queues' | 'canned'>('chat');
+  // Navigation Views: 'chat' | 'flowbuilder' | 'team' | 'queues' | 'canned' | 'whitelabel'
+  const [activeNav, setActiveNav] = useState<'chat' | 'flowbuilder' | 'team' | 'queues' | 'canned' | 'whitelabel'>('chat');
 
   // Operator Session
   const [operator, setOperator] = useState<Operator | null>(null);
@@ -734,6 +735,10 @@ export default function OperatorDashboardPage() {
     ...myTickets.map((t) => ({ ...t, priority: (t as any).priority || 'NORMAL' })),
     ...closedTickets.map((t) => ({ ...t, priority: (t as any).priority || 'NORMAL' })),
   ] as any;
+
+  if (activeNav === 'whitelabel') {
+    return <WhiteLabelConfig onBack={() => setActiveNav('chat')} />;
+  }
 
   if (activeNav === 'chat') {
     return (
